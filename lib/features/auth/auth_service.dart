@@ -1,13 +1,13 @@
 import 'dart:async';
-import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 
 import '../../core/constants/app_constants.dart';
 import '../../core/network/api_client.dart';
 import '../../core/storage/local_storage.dart';
 import '../../core/storage/secure_storage.dart';
-import 'demo_accounts.dart';
 
 final authServiceProvider = Provider<AuthService>((ref) {
   return AuthService(
@@ -20,26 +20,33 @@ final authServiceProvider = Provider<AuthService>((ref) {
 class AuthResult {
   const AuthResult({
     required this.token,
-    this.userId,
-    this.username,
-    this.uiStyle,
+    required this.csrfToken,
+    required this.userId,
+    required this.account,
+    required this.oldUserFlg,
+    this.name,
+    this.trialUserFlg = false,
   });
 
   final String token;
-  final String? userId;
-  final String? username;
-  final UiStyle? uiStyle;
+  final String csrfToken;
+  final String userId;
+  final String account;
+  final String? name;
+  final bool oldUserFlg;
+  final bool trialUserFlg;
 }
 
 class AuthException implements Exception {
-  AuthException(this.message);
+  AuthException(this.message, {this.lockedUntil});
+
   final String message;
+  final int? lockedUntil;
 
   @override
   String toString() => message;
 }
 
-/// Authenticates against the JSON API. Never treats login as always successful.
 class AuthService {
   AuthService({
     required ApiClient apiClient,
@@ -53,151 +60,137 @@ class AuthService {
   final SecureStorage _secure;
   final LocalStorage _local;
 
-  Future<bool> hasValidSession() => _secure.hasValidSession();
-
-  /// Saved username/password for a specific UI style (U1 / U2 separate).
-  Future<({bool remember, String? username, String? password})>
-      loadRememberedCredentials(UiStyle style) async {
-    final remember = _local.getRememberMeFor(style);
-    if (!remember) {
-      return (remember: false, username: null, password: null);
-    }
-    final username = _local.getRememberedUsernameFor(style);
-    final password = await _secure.getRememberedPasswordFor(style);
-    return (remember: true, username: username, password: password);
-  }
-
-  Future<void> _persistRemembered({
-    required UiStyle style,
-    required bool rememberMe,
-    required String username,
-    required String password,
-  }) async {
-    await _local.setRememberMeFor(style, rememberMe);
-    if (rememberMe) {
-      await _local.setRememberedUsernameFor(style, username);
-      await _secure.setRememberedPasswordFor(style, password);
-    } else {
-      await _local.setRememberedUsernameFor(style, null);
-      await _secure.clearRememberedPasswordFor(style);
-    }
-  }
-
   Future<AuthResult> login({
-    required String username,
+    required String account,
     required String password,
-    required bool rememberMe,
-    UiStyle? selectedStyle,
+    required bool rememberAccount,
+    bool trial = false,
   }) async {
-    final trimmedUser = username.trim();
-    if (trimmedUser.isEmpty) {
-      throw AuthException('请输入用户名');
-    }
-    if (password.isEmpty) {
-      throw AuthException('请输入密码');
-    }
-
-    // Fake local accounts → different UI styles (classic / upgrade).
-    final demo = DemoAccounts.match(trimmedUser, password);
-    if (demo != null) {
-      final token = 'demo-token-${demo.userId}';
-      await _secure.setAuthToken(token);
-      await _secure.setUserId(demo.userId);
-      await _local.setUiStyle(demo.uiStyle);
-      await _persistRemembered(
-        style: demo.uiStyle,
-        rememberMe: rememberMe,
-        username: demo.username,
-        password: password,
-      );
-      return AuthResult(
-        token: token,
-        userId: demo.userId,
-        username: demo.username,
-        uiStyle: demo.uiStyle,
-      );
+    final trimmed = account.trim();
+    if (trimmed.isEmpty || password.isEmpty) {
+      throw AuthException('账号或密码不可为空');
     }
 
     try {
       final json = await _api.postJson(
         AppConstants.loginPath,
         body: {
-          'username': trimmedUser,
+          'account': trimmed,
           'password': password,
+          'equipment': _equipmentLabel(),
+          'browser': 'Newsworld',
         },
       );
 
-      final token = _extractToken(json);
-      if (token == null || token.isEmpty) {
-        throw AuthException('登录失败：服务器未返回有效令牌');
+      final token = json['accessToken']?.toString() ?? '';
+      if (token.isEmpty) {
+        throw AuthException('服务器未返回访问令牌');
       }
 
-      final userId = json['userId']?.toString() ??
-          json['user_id']?.toString() ??
-          (json['user'] is Map
-              ? (json['user'] as Map)['id']?.toString()
-              : null);
+      final csrf = json['csrfToken']?.toString() ?? '';
+      final userId = json['id']?.toString() ?? '';
+      final resolvedAccount = json['account']?.toString() ?? trimmed;
+      final name = json['name']?.toString();
+      final oldUser = _isOldUser(json['old_user_flg']);
+      final trialUser = trial ||
+          json['trial_user_flg'] == true ||
+          json['trial_user_flg'] == 1;
 
       await _secure.setAuthToken(token);
       await _secure.setUserId(userId);
-
-      final style = selectedStyle ?? _local.getUiStyle() ?? UiStyle.u1;
-      await _persistRemembered(
-        style: style,
-        rememberMe: rememberMe,
-        username: trimmedUser,
-        password: password,
-      );
+      await _secure.setCsrfToken(csrf);
+      await _secure.setAccount(resolvedAccount);
+      await _secure.setDisplayName(name);
+      await _secure.setOldUserFlag(oldUser);
+      await _secure.setTrialUser(trialUser);
+      if (!trial) {
+        await _local.setRememberMe(rememberAccount);
+        await _local.setRememberedAccount(rememberAccount ? trimmed : null);
+      }
 
       return AuthResult(
         token: token,
+        csrfToken: csrf,
         userId: userId,
-        username: trimmedUser,
-        uiStyle: style,
+        account: resolvedAccount,
+        name: name,
+        oldUserFlg: oldUser,
+        trialUserFlg: trialUser,
       );
     } on AuthException {
       rethrow;
-    } on ApiException catch (e) {
-      if (e.statusCode == 401 || e.statusCode == 403) {
-        throw AuthException('用户名或密码错误');
+    } on ApiException catch (error) {
+      if (error.lockedUntil != null || error.message.contains('已被锁定')) {
+        throw AuthException(
+          '此账号已被锁定',
+          lockedUntil: error.lockedUntil ??
+              DateTime.now().millisecondsSinceEpoch +
+                  const Duration(minutes: 3).inMilliseconds,
+        );
       }
-      throw AuthException(_localizeApiMessage(e.message));
-    } on SocketException {
-      throw AuthException('网络连接失败，请检查网络后重试');
+      throw AuthException(
+        error.message.isEmpty ? '登录失败，请稍后重试' : error.message,
+      );
+    } on http.ClientException {
+      throw AuthException('无法连接服务器，请确认 API 服务已启动');
     } on TimeoutException {
       throw AuthException('请求超时，请稍后重试');
     } on FormatException {
       throw AuthException('服务器响应格式错误');
-    } catch (_) {
-      throw AuthException('登录失败，请稍后重试');
     }
   }
 
-  Future<void> logout() async {
-    await _secure.clearSession();
+  Future<void> changePassword({
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    final next = newPassword.trim();
+    if (!RegExp(r'^[A-Za-z0-9]{6,32}$').hasMatch(next)) {
+      throw AuthException('只能由6-32位数字和字母组成！');
+    }
+    if (next != confirmPassword.trim()) {
+      throw AuthException('两次密码不同！');
+    }
+
+    final token = await _secure.getAuthToken();
+    final csrf = await _secure.getCsrfToken();
+    try {
+      await _api.putJson(
+        AppConstants.changePasswordPath,
+        token: token,
+        csrfToken: csrf,
+        body: {
+          'new_password': next,
+          'confirm_password': confirmPassword.trim(),
+        },
+      );
+    } on ApiException catch (error) {
+      throw AuthException(
+        error.message.isEmpty ? '修改失败，请稍后重试' : error.message,
+      );
+    } on http.ClientException {
+      throw AuthException('无法连接服务器，请确认 API 服务已启动');
+    } on TimeoutException {
+      throw AuthException('请求超时，请稍后重试');
+    }
+
+    await logout();
   }
 
-  String? _extractToken(Map<String, dynamic> json) {
-    final direct = json['token'] ?? json['accessToken'] ?? json['access_token'];
-    if (direct != null) return direct.toString();
-    final data = json['data'];
-    if (data is Map) {
-      final nested = data['token'] ?? data['accessToken'] ?? data['access_token'];
-      if (nested != null) return nested.toString();
+  Future<void> logout() => _secure.clearSession();
+
+  bool _isOldUser(Object? value) {
+    if (value == false || value == 0 || value == '0' || value == 'false') {
+      return false;
     }
-    return null;
+    return true;
   }
 
-  String _localizeApiMessage(String message) {
-    final lower = message.toLowerCase();
-    if (lower.contains('invalid') ||
-        lower.contains('unauthorized') ||
-        lower.contains('credential')) {
-      return '用户名或密码错误';
-    }
-    if (message.contains('用户') || message.contains('密码') || message.contains('登录')) {
-      return message;
-    }
-    return '登录失败：$message';
+  String _equipmentLabel() {
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.iOS => 'iOS',
+      TargetPlatform.android => 'Android',
+      _ => 'Flutter',
+    };
   }
 }

@@ -16,7 +16,8 @@ class NewsworldApp extends ConsumerWidget {
     return MaterialApp.router(
       title: AppConstants.brandName,
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
+      theme: AppTheme.dark,
+      color: const Color(0xFF080808),
       locale: const Locale('zh', 'CN'),
       supportedLocales: const [Locale('zh', 'CN')],
       localizationsDelegates: const [

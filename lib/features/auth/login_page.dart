@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:math';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,528 +10,586 @@ import 'package:go_router/go_router.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/router/app_router.dart';
 import '../../core/storage/local_storage.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/widgets/twinkling_logo.dart';
+import '../preload/lobby_preload.dart';
 import 'auth_service.dart';
 
-/// Shared login page for both U1 and U2 (no registration).
-class SharedLoginPage extends ConsumerStatefulWidget {
-  const SharedLoginPage({super.key});
+class LoginPage extends ConsumerStatefulWidget {
+  const LoginPage({super.key});
 
   @override
-  ConsumerState<SharedLoginPage> createState() => _SharedLoginPageState();
+  ConsumerState<LoginPage> createState() => _LoginPageState();
 }
 
-class _SharedLoginPageState extends ConsumerState<SharedLoginPage> {
-  static const Color _gold = Color(0xFFFFBF00);
-  static const Color _goldLight = Color(0xFFFFE566);
-  static const Color _fieldFill = Color(0xCC1A1A1A);
-  static const double _formWidthFactor = 0.60;
-  static const double _controlHeight = 52;
-
-  final _formKey = GlobalKey<FormState>();
-  final _usernameController = TextEditingController();
+class _LoginPageState extends ConsumerState<LoginPage> {
+  final _accountController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _usernameFocus = FocusNode();
-  final _passwordFocus = FocusNode();
+  final _captchaController = TextEditingController();
+  final _random = Random();
 
-  bool _rememberMe = false;
+  bool _rememberAccount = false;
   bool _obscurePassword = true;
   bool _submitting = false;
+  String _captcha = '';
   String? _errorMessage;
-  UiStyle? _uiStyle;
-
-  String get _logoAsset {
-    switch (_uiStyle) {
-      case UiStyle.u2:
-        return 'assets/images/logo_upgrade.png';
-      case UiStyle.u1:
-      case null:
-        return 'assets/images/logo_classic.png';
-    }
-  }
+  int? _lockedUntil;
+  Timer? _lockTimer;
 
   @override
   void initState() {
     super.initState();
+    _refreshCaptcha();
     final local = ref.read(localStorageProvider);
-    _uiStyle = local.getUiStyle() ?? UiStyle.u1;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _restoreRemembered());
-  }
-
-  Future<void> _restoreRemembered() async {
-    final style = _uiStyle ?? UiStyle.u1;
-    final saved =
-        await ref.read(authServiceProvider).loadRememberedCredentials(style);
-    if (!mounted) return;
-    setState(() {
-      _rememberMe = saved.remember;
-      if (saved.username != null && saved.username!.isNotEmpty) {
-        _usernameController.text = saved.username!;
-      }
-      if (saved.password != null && saved.password!.isNotEmpty) {
-        _passwordController.text = saved.password!;
-      }
-    });
+    _rememberAccount = local.getRememberMe();
+    final saved = local.getRememberedAccount();
+    if (_rememberAccount && saved != null) {
+      _accountController.text = saved;
+    }
   }
 
   @override
   void dispose() {
-    _usernameController.dispose();
+    _lockTimer?.cancel();
+    _accountController.dispose();
     _passwordController.dispose();
-    _usernameFocus.dispose();
-    _passwordFocus.dispose();
+    _captchaController.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  bool get _locked =>
+      _lockedUntil != null &&
+      _lockedUntil! > DateTime.now().millisecondsSinceEpoch;
+
+  void _refreshCaptcha() {
+    _captcha = List.generate(4, (_) => _random.nextInt(10).toString()).join();
+    _captchaController.clear();
+  }
+
+  void _applyLock(int until) {
+    _lockTimer?.cancel();
+    _lockedUntil = until;
+    _lockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (!_locked) {
+        _lockTimer?.cancel();
+        setState(() {
+          _lockedUntil = null;
+          _errorMessage = null;
+        });
+      } else {
+        setState(() {});
+      }
+    });
+  }
+
+  Future<void> _submit({bool trial = false}) async {
     FocusScope.of(context).unfocus();
-    setState(() => _errorMessage = null);
+    if (_submitting) return;
 
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final account = trial ? AppConstants.trialAccount : _accountController.text;
+    final password =
+        trial ? AppConstants.trialPassword : _passwordController.text;
 
-    setState(() => _submitting = true);
+    if (!trial && (account.trim().isEmpty || password.isEmpty)) {
+      setState(() => _errorMessage = '账号或密码不可为空');
+      return;
+    }
+    if (_locked) {
+      setState(() => _errorMessage = '此账号已被锁定');
+      return;
+    }
+    if (!trial && _captchaController.text.trim() != _captcha) {
+      setState(() {
+        _errorMessage = '验证码不对';
+        _refreshCaptcha();
+      });
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _errorMessage = null;
+    });
+
     try {
       final result = await ref.read(authServiceProvider).login(
-            username: _usernameController.text,
-            password: _passwordController.text,
-            rememberMe: _rememberMe,
-            selectedStyle: _uiStyle,
+            account: account,
+            password: password,
+            rememberAccount: _rememberAccount,
+            trial: trial,
           );
-
       if (!mounted) return;
-
-      final style =
-          result.uiStyle ?? ref.read(localStorageProvider).getUiStyle();
-      if (style == UiStyle.u2) {
-        context.go(AppRoutes.homeVertical);
-      } else {
-        // U1 → horizontal home (terms is not on this route).
-        context.go(AppRoutes.homeHorizontal);
-      }
-    } on AuthException catch (e) {
-      if (mounted) setState(() => _errorMessage = e.message);
-    } catch (_) {
-      if (mounted) {
-        setState(() => _errorMessage = '登录失败，请稍后重试');
-      }
+      context.go(
+        result.oldUserFlg ? AppRoutes.session : AppRoutes.changePassword,
+      );
+    } on AuthException catch (error) {
+      if (!mounted) return;
+      if (error.lockedUntil != null) _applyLock(error.lockedUntil!);
+      setState(() {
+        _errorMessage = error.message;
+        _refreshCaptcha();
+      });
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
   }
 
-  void _showSoon(String label) {
+  Future<void> _confirmTrial() async {
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1B140C),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: const BorderSide(color: CasinoColors.goldDeep),
+          ),
+          title: const Text(
+            '提示',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: CasinoColors.gold),
+          ),
+          content: const Text(
+            '试玩账号为免费账号，不可下分汇款。确定要用试玩账号登录？',
+            style: TextStyle(color: Colors.white, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('确定'),
+            ),
+          ],
+        );
+      },
+    );
+    if (accepted == true) await _submit(trial: true);
+  }
+
+  void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$label（即将推出）'),
-        behavior: SnackBarBehavior.floating,
-      ),
+      SnackBar(content: Text(message)),
     );
   }
 
-  InputDecoration _fieldDecoration({
+  void _showQq() {
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1B140C),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
+            side: const BorderSide(color: CasinoColors.goldDeep),
+          ),
+          title: const Text(
+            '在线QQ',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: CasinoColors.gold),
+          ),
+          content: const Text(
+            'QQ: 1258081277',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('确定'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openAgentSite() async {
+    final site = ref.read(lobbyPreloadProvider).setting('agent_website');
+    if (site == null || site.isEmpty) {
+      _showMessage('暂无代理网址');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: site));
+    if (!mounted) return;
+    _showMessage('已复制代理网址');
+  }
+
+  void _downloadClient() {
+    _showMessage('客户端请在电脑浏览器下载');
+  }
+
+  InputDecoration _liquidField({
     required String hint,
     Widget? prefixIcon,
     Widget? suffixIcon,
   }) {
+    const border = OutlineInputBorder(
+      borderRadius: BorderRadius.all(Radius.circular(8)),
+      borderSide: BorderSide(color: Color(0x66C6A15B)),
+    );
     return InputDecoration(
       hintText: hint,
-      hintStyle: TextStyle(
-        color: Colors.white.withValues(alpha: 0.42),
-        fontSize: 15,
-        fontWeight: FontWeight.w400,
-      ),
-      filled: true,
-      fillColor: _fieldFill,
       prefixIcon: prefixIcon,
       suffixIcon: suffixIcon,
-      // Keep icon gold on focus (avoid theme primary takeover).
-      prefixIconColor: _gold,
-      suffixIconColor: _gold,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      constraints: const BoxConstraints(minHeight: _controlHeight),
       isDense: true,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: _gold, width: 1.2),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: _gold, width: 1.2),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: _goldLight, width: 1.6),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Colors.redAccent, width: 1.2),
-      ),
-      focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Colors.redAccent, width: 1.6),
+      prefixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 32),
+      filled: true,
+      fillColor: const Color(0x66140F0A),
+      hintStyle: const TextStyle(color: Color(0x99F4E7C3), fontSize: 14),
+      prefixIconColor: CasinoColors.gold,
+      suffixIconColor: CasinoColors.gold,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      border: border,
+      enabledBorder: border,
+      focusedBorder: const OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(8)),
+        borderSide: BorderSide(color: Color(0xCCE8C872), width: 1.2),
       ),
     );
   }
 
-  static const TextStyle _inputTextStyle = TextStyle(
-    color: Colors.white,
-    fontSize: 16,
-    fontWeight: FontWeight.w500,
-    height: 1.25,
-  );
+  @override
+  Widget build(BuildContext context) {
+    final lockSeconds = _locked
+        ? ((_lockedUntil! - DateTime.now().millisecondsSinceEpoch) / 1000)
+            .ceil()
+        : 0;
+
+    return GoldenDarkBackground(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: constraints.maxHeight - 48,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  LiquidGlassCard(
+                    child: Column(
+                          children: [
+                            const TwinklingLogo(width: 92),
+                            const SizedBox(height: 16),
+                            TextField(
+                              controller: _accountController,
+                              textInputAction: TextInputAction.next,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: _liquidField(
+                                hint: '请输入账号',
+                                prefixIcon: const Icon(Icons.person_outline, size: 18),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _passwordController,
+                              obscureText: _obscurePassword,
+                              textInputAction: TextInputAction.next,
+                              style: const TextStyle(color: Colors.white),
+                              decoration: _liquidField(
+                                hint: '请输入密码',
+                                prefixIcon: const Icon(Icons.lock_outline, size: 18),
+                                suffixIcon: IconButton(
+                                  onPressed: () => setState(
+                                    () => _obscurePassword = !_obscurePassword,
+                                  ),
+                                  icon: Icon(
+                                    _obscurePassword
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                    size: 18,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                const Text(
+                                  '验证码',
+                                  style: TextStyle(color: CasinoColors.muted),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: TextField(
+                                    controller: _captchaController,
+                                    keyboardType: TextInputType.number,
+                                    style: const TextStyle(color: Colors.white),
+                                    decoration: _liquidField(hint: '4 位数字'),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                InkWell(
+                                  onTap: () => setState(_refreshCaptcha),
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Container(
+                                    width: 68,
+                                    height: 40,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0x33FFFFFF),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: const Color(0x66FFFFFF),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      _captcha,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 2,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: () => setState(
+                                  () => _rememberAccount = !_rememberAccount,
+                                ),
+                                style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  padding: const EdgeInsets.fromLTRB(4, 16, 4, 16),
+                                  minimumSize: const Size(0, 52),
+                                ),
+                                icon: Icon(
+                                  _rememberAccount
+                                      ? Icons.check_box
+                                      : Icons.check_box_outline_blank,
+                                  color: CasinoColors.gold,
+                                  size: 22,
+                                ),
+                                label: const Text(
+                                  '记住账号',
+                                  style: TextStyle(
+                                    color: CasinoColors.muted,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (_errorMessage != null)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  _locked
+                                      ? '此账号已被锁定 ${lockSeconds}s'
+                                      : _errorMessage!,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Color(0xFFFFB4B4),
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ),
+                            GoldButton(
+                              label: '登录',
+                              loading: _submitting,
+                              onPressed: _locked ? null : () => _submit(),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _FrontButton(
+                                    label: '在线QQ',
+                                    colors: const [
+                                      Color(0xFF123A9A),
+                                      Color(0xFF1E5CFF),
+                                      Color(0xFF0A2E78),
+                                    ],
+                                    onPressed: _showQq,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _FrontButton(
+                                    label: '试玩',
+                                    colors: const [
+                                      Color(0xFF8B1020),
+                                      Color(0xFFC41E3A),
+                                      Color(0xFF6B0A14),
+                                    ],
+                                    onPressed:
+                                        _submitting ? null : _confirmTrial,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _FrontButton(
+                                    label: '代理登录',
+                                    colors: const [
+                                      Color(0xFF8E1458),
+                                      Color(0xFFC2186A),
+                                      Color(0xFF6B1048),
+                                    ],
+                                    onPressed: _openAgentSite,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _FrontButton(
+                                    label: '客户端下载',
+                                    colors: const [
+                                      Color(0xFFA84A00),
+                                      Color(0xFFE07010),
+                                      Color(0xFF8A3E00),
+                                    ],
+                                    onPressed: _downloadClient,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            const Text(
+                              '当前状态: 网络投注',
+                              style: TextStyle(
+                                color: Color(0xFFE6E0D4),
+                                fontSize: 14,
+                                letterSpacing: 1,
+                              ),
+                            ),
+                          ],
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Member-site `.liquid-glass` panel: blur, sheen, and a soft inner edge.
+class LiquidGlassCard extends StatelessWidget {
+  const LiquidGlassCard({super.key, required this.child});
+
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    // Keyboard overlays; layout / background size stay fixed.
-    final keyboardBottom = MediaQuery.viewInsetsOf(context).bottom;
-
-    return Theme(
-      data: Theme.of(context).copyWith(
-        textSelectionTheme: TextSelectionThemeData(
-          cursorColor: _gold,
-          selectionColor: _gold.withValues(alpha: 0.35),
-          selectionHandleColor: _gold,
-        ),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.black,
-        // Critical: do not shrink body when keyboard opens.
-        resizeToAvoidBottomInset: false,
-        body: GestureDetector(
-          onTap: () => FocusScope.of(context).unfocus(),
-          behavior: HitTestBehavior.opaque,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Image.asset(
-                'assets/images/login_bg.png',
-                fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
-                errorBuilder: (context, error, stackTrace) {
-                  return Image.asset(
-                    'assets/images/login_bg.jpg',
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                    height: double.infinity,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const ColoredBox(color: Color(0xFF0A1628));
-                    },
-                  );
-                },
-              ),
-              const DecoratedBox(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(22),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: DecoratedBox(
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
+                  borderRadius: BorderRadius.circular(22),
+                  gradient: const LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0x66000000),
-                      Color(0x33000000),
-                      Color(0x00000000),
-                      Color(0x99000000),
+                      Color(0xE6241C12),
+                      Color(0xE6100E0C),
+                      Color(0xF20A0908),
                     ],
-                    stops: [0, 0.25, 0.55, 1],
+                  ),
+                  border: Border.all(color: const Color(0x99C6A15B)),
+                ),
+              ),
+            ),
+            const Positioned(
+              top: 0,
+              left: 18,
+              right: 18,
+              child: SizedBox(
+                height: 1,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Color(0x00E8C872),
+                        Color(0xCCE8C872),
+                        Color(0x00E8C872),
+                      ],
+                    ),
                   ),
                 ),
               ),
-              SafeArea(
-                child: Column(
-                  children: [
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: IconButton(
-                        icon: const Icon(Icons.arrow_back, color: _gold),
-                        onPressed: () => context.go(AppRoutes.uiSelection),
-                        tooltip: '返回',
-                      ),
-                    ),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        // Extra bottom padding so focused field can scroll above keyboard
-                        // without resizing the overall design.
-                        padding: EdgeInsets.fromLTRB(
-                          16,
-                          0,
-                          16,
-                          24 + keyboardBottom,
-                        ),
-                        keyboardDismissBehavior:
-                            ScrollViewKeyboardDismissBehavior.onDrag,
-                        child: Form(
-                          key: _formKey,
-                          child: Column(
-                            children: [
-                              // Push logo + form slightly lower on screen.
-                              const SizedBox(height: 48),
-                              Image.asset(
-                                _logoAsset,
-                                width: 168,
-                                height: 168,
-                                fit: BoxFit.contain,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return Image.asset(
-                                    AppConstants.appLogoAsset,
-                                    width: 120,
-                                    height: 120,
-                                    fit: BoxFit.contain,
-                                  );
-                                },
-                              ),
-                              const SizedBox(height: 28),
-                              SizedBox(
-                                width: MediaQuery.sizeOf(context).width *
-                                    _formWidthFactor,
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    TextFormField(
-                                      controller: _usernameController,
-                                      focusNode: _usernameFocus,
-                                      style: _inputTextStyle,
-                                      cursorColor: _gold,
-                                      cursorWidth: 2,
-                                      cursorRadius: const Radius.circular(1),
-                                      keyboardAppearance: Brightness.dark,
-                                      textInputAction: TextInputAction.next,
-                                      autofillHints: const [
-                                        AutofillHints.username,
-                                      ],
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.deny(
-                                          RegExp(r'\n'),
-                                        ),
-                                      ],
-                                      onFieldSubmitted: (_) {
-                                        _passwordFocus.requestFocus();
-                                      },
-                                      decoration: _fieldDecoration(
-                                        hint: '请输入账号',
-                                        prefixIcon: const Icon(
-                                          Icons.person_outline,
-                                          color: _gold,
-                                        ),
-                                      ),
-                                      validator: (value) {
-                                        if (value == null ||
-                                            value.trim().isEmpty) {
-                                          return '请输入账号';
-                                        }
-                                        return null;
-                                      },
-                                    ),
-                                    const SizedBox(height: 14),
-                                    TextFormField(
-                                      controller: _passwordController,
-                                      focusNode: _passwordFocus,
-                                      style: _inputTextStyle,
-                                      cursorColor: _gold,
-                                      cursorWidth: 2,
-                                      cursorRadius: const Radius.circular(1),
-                                      keyboardAppearance: Brightness.dark,
-                                      obscureText: _obscurePassword,
-                                      textInputAction: TextInputAction.done,
-                                      autofillHints: const [
-                                        AutofillHints.password,
-                                      ],
-                                      onFieldSubmitted: (_) => _submit(),
-                                      decoration: _fieldDecoration(
-                                        hint: '请输入密码',
-                                        prefixIcon: const Icon(
-                                          Icons.lock_outline,
-                                          color: _gold,
-                                        ),
-                                        suffixIcon: IconButton(
-                                          onPressed: () {
-                                            setState(
-                                              () => _obscurePassword =
-                                                  !_obscurePassword,
-                                            );
-                                          },
-                                          icon: Icon(
-                                            _obscurePassword
-                                                ? Icons.visibility_outlined
-                                                : Icons.visibility_off_outlined,
-                                            color: _gold,
-                                          ),
-                                          tooltip: _obscurePassword
-                                              ? '显示密码'
-                                              : '隐藏密码',
-                                        ),
-                                      ),
-                                      validator: (value) {
-                                        if (value == null || value.isEmpty) {
-                                          return '请输入密码';
-                                        }
-                                        return null;
-                                      },
-                                    ),
-                                    const SizedBox(height: 10),
-                                    Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 24,
-                                          height: 24,
-                                          child: Checkbox(
-                                            value: _rememberMe,
-                                            activeColor: _gold,
-                                            checkColor: Colors.black,
-                                            side: const BorderSide(
-                                              color: _gold,
-                                              width: 1.5,
-                                            ),
-                                            materialTapTargetSize:
-                                                MaterialTapTargetSize
-                                                    .shrinkWrap,
-                                            visualDensity:
-                                                VisualDensity.compact,
-                                            onChanged: _submitting
-                                                ? null
-                                                : (value) {
-                                                    setState(
-                                                      () => _rememberMe =
-                                                          value ?? false,
-                                                    );
-                                                  },
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        GestureDetector(
-                                          onTap: _submitting
-                                              ? null
-                                              : () => setState(
-                                                    () => _rememberMe =
-                                                        !_rememberMe,
-                                                  ),
-                                          child: const Text(
-                                            '记住账户和密码',
-                                            style: TextStyle(
-                                              color: _gold,
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (_errorMessage != null) ...[
-                                      const SizedBox(height: 10),
-                                      Text(
-                                        _errorMessage!,
-                                        style: const TextStyle(
-                                          color: Color(0xFFFF8A80),
-                                          fontSize: 13,
-                                        ),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 22),
-                                    _GoldButton(
-                                      label: '登录',
-                                      loading: _submitting,
-                                      onPressed:
-                                          _submitting ? null : _submit,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    _GoldButton(
-                                      label: '试玩',
-                                      onPressed: () => _showSoon('试玩'),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    _GoldButton(
-                                      label: 'H5安装说明',
-                                      onPressed: () =>
-                                          _showSoon('H5安装说明'),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    _GoldButton(
-                                      label: '安卓APP下载',
-                                      onPressed: () =>
-                                          _showSoon('安卓APP下载'),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+            ),
+            const Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: Alignment(0, -1.05),
+                    radius: 0.9,
+                    colors: [Color(0x33C6A15B), Color(0x00000000)],
+                  ),
                 ),
               ),
-            ],
-          ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 32, 16, 14),
+              child: child,
+            ),
+          ],
         ),
       ),
     );
   }
 }
 
-class _GoldButton extends StatelessWidget {
-  const _GoldButton({
+class _FrontButton extends StatelessWidget {
+  const _FrontButton({
     required this.label,
+    required this.colors,
     required this.onPressed,
-    this.loading = false,
   });
 
-  static const Color _gold = Color(0xFFFFBF00);
-  static const Color _goldLight = Color(0xFFFFE566);
-  static const Color _goldDark = Color(0xFFE0A800);
-  static const double _controlHeight = 52;
-
   final String label;
+  final List<Color> colors;
   final VoidCallback? onPressed;
-  final bool loading;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onPressed,
-        borderRadius: BorderRadius.circular(10),
-        child: Ink(
-          height: _controlHeight,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10),
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: onPressed == null && !loading
-                  ? [
-                      _gold.withValues(alpha: 0.45),
-                      _goldDark.withValues(alpha: 0.45),
-                    ]
-                  : const [_goldLight, _gold, _goldDark],
-              stops: const [0, 0.45, 1],
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: colors,
+        ),
+        border: Border.all(color: const Color(0x99E8C872)),
+      ),
+      child: SizedBox(
+        height: 36,
+        child: TextButton(
+          onPressed: onPressed,
+          style: TextButton.styleFrom(
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
             ),
-            boxShadow: [
-              BoxShadow(
-                color: _gold.withValues(alpha: 0.28),
-                blurRadius: 10,
-                offset: const Offset(0, 3),
-              ),
-            ],
+            textStyle: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+            ),
           ),
-          child: Center(
-            child: loading
-                ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: Colors.black,
-                    ),
-                  )
-                : Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(label),
           ),
         ),
       ),

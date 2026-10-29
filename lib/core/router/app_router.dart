@@ -3,67 +3,43 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/auth/login_page.dart';
-import '../../features/home_horizontal/horizontal_home_page.dart';
-import '../../features/home_vertical/vertical_home_page.dart';
-import '../../features/init_loading/init_loading_page.dart';
-import '../../features/splash/splash_page.dart';
-import '../../features/terms/terms_page.dart';
-import '../../features/ui_selection/ui_selection_page.dart';
+import '../../features/auth/session_pages.dart';
+import '../../features/loading/loading_page.dart';
 
 abstract final class AppRoutes {
-  static const splash = '/';
-  static const uiSelection = '/ui-selection';
-  static const initLoading = '/init-loading';
+  static const loading = '/';
   static const login = '/login';
-  static const terms = '/terms';
-  static const homeHorizontal = '/home/horizontal';
-  static const homeVertical = '/home/vertical';
+  static const changePassword = '/change-password';
+  static const session = '/session';
 }
 
 final appRouterProvider = Provider<GoRouter>((ref) {
   return GoRouter(
-    initialLocation: AppRoutes.splash,
+    initialLocation: AppRoutes.loading,
     routes: [
       GoRoute(
-        path: AppRoutes.splash,
-        name: 'splash',
-        builder: (context, state) => const SplashPage(),
-      ),
-      GoRoute(
-        path: AppRoutes.uiSelection,
-        name: 'uiSelection',
-        builder: (context, state) => const UiSelectionPage(),
-      ),
-      GoRoute(
-        path: AppRoutes.initLoading,
-        name: 'initLoading',
-        builder: (context, state) => const InitLoadingPage(),
+        path: AppRoutes.loading,
+        name: 'loading',
+        builder: (context, state) => const LoadingPage(),
       ),
       GoRoute(
         path: AppRoutes.login,
         name: 'login',
-        builder: (context, state) => const SharedLoginPage(),
+        builder: (context, state) => const LoginPage(),
       ),
       GoRoute(
-        path: AppRoutes.terms,
-        name: 'terms',
-        builder: (context, state) => const TermsPage(),
+        path: AppRoutes.changePassword,
+        name: 'changePassword',
+        builder: (context, state) => const ChangePasswordPage(),
       ),
       GoRoute(
-        path: AppRoutes.homeHorizontal,
-        name: 'homeHorizontal',
-        builder: (context, state) => const HorizontalHomePage(),
-      ),
-      GoRoute(
-        path: AppRoutes.homeVertical,
-        name: 'homeVertical',
-        builder: (context, state) => const VerticalHomePage(),
+        path: AppRoutes.session,
+        name: 'session',
+        builder: (context, state) => const SessionPage(),
       ),
     ],
     errorBuilder: (context, state) => Scaffold(
-      body: Center(
-        child: Text('页面不存在：${state.uri}'),
-      ),
+      body: Center(child: Text('页面不存在：${state.uri}')),
     ),
   );
 });

@@ -25,9 +25,7 @@ class _LoadingPageState extends ConsumerState<LoadingPage> {
   @override
   void initState() {
     super.initState();
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-    ]);
+    SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
@@ -35,12 +33,14 @@ class _LoadingPageState extends ConsumerState<LoadingPage> {
     if (_started) return;
     _started = true;
 
-    final snapshot = await ref.read(preloadLoaderProvider).load(
-      onProgress: (completed, total) {
-        if (!mounted) return;
-        setState(() => _completed = completed.clamp(0, total));
-      },
-    );
+    final snapshot = await ref
+        .read(preloadLoaderProvider)
+        .load(
+          onProgress: (completed, total) {
+            if (!mounted) return;
+            setState(() => _completed = completed.clamp(0, total));
+          },
+        );
     if (!mounted) return;
     ref.read(lobbyPreloadProvider.notifier).replace(snapshot);
 
@@ -78,13 +78,40 @@ class _LoadingPageState extends ConsumerState<LoadingPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const TwinklingLogo(width: 112),
-                const SizedBox(height: 36),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(99),
-                  child: SizedBox(
-                    height: 3,
-                    width: double.infinity,
+                const TwinklingLogo(width: 200),
+
+                const SizedBox(height: 28),
+
+                // Text above progress bar
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '加载背景资源',
+                    style: TextStyle(
+                      color: Color(0xFFD6D0C5),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
+                // Progress bar
+                Container(
+                  height: 13,
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF55504A),
+                    borderRadius: BorderRadius.circular(99),
+                    border: Border.all(
+                      color: const Color(0xFF9B927F),
+                      width: 1,
+                    ),
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(99),
                     child: LinearProgressIndicator(
                       value: progress,
                       backgroundColor: const Color(0x33C6A15B),
@@ -92,14 +119,16 @@ class _LoadingPageState extends ConsumerState<LoadingPage> {
                     ),
                   ),
                 ),
+
                 const SizedBox(height: 14),
+
                 Text(
-                  '$percent%',
+                  '正在加载游戏……$percent%',
                   style: const TextStyle(
-                    color: CasinoColors.gold,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 2,
+                    color: Color(0xFFD6D0C5),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 1,
                   ),
                 ),
               ],

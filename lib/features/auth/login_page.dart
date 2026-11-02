@@ -1,11 +1,11 @@
 import 'dart:async';
-import 'dart:math';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/router/app_router.dart';
@@ -13,8 +13,9 @@ import '../../core/storage/local_storage.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_dialog.dart';
 import '../../core/widgets/twinkling_logo.dart';
-import '../preload/lobby_preload.dart';
 import 'auth_service.dart';
+
+enum _InstallGuidePlatform { android, ios }
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -26,20 +27,19 @@ class LoginPage extends ConsumerStatefulWidget {
 class _LoginPageState extends ConsumerState<LoginPage> {
   final _accountController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _captchaController = TextEditingController();
-  final _random = Random();
+  final _h5InstallButtonKey = GlobalKey();
+  final _h5InstallOptionsKey = GlobalKey();
 
   bool _rememberAccount = false;
   bool _obscurePassword = true;
   bool _submitting = false;
-  String _captcha = '';
+  bool _showH5InstallOptions = false;
   int? _lockedUntil;
   Timer? _lockTimer;
 
   @override
   void initState() {
     super.initState();
-    _refreshCaptcha();
     final local = ref.read(localStorageProvider);
     _rememberAccount = local.getRememberMe();
     final saved = local.getRememberedAccount();
@@ -53,18 +53,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     _lockTimer?.cancel();
     _accountController.dispose();
     _passwordController.dispose();
-    _captchaController.dispose();
     super.dispose();
   }
 
   bool get _locked =>
       _lockedUntil != null &&
       _lockedUntil! > DateTime.now().millisecondsSinceEpoch;
-
-  void _refreshCaptcha() {
-    _captcha = List.generate(4, (_) => _random.nextInt(10).toString()).join();
-    _captchaController.clear();
-  }
 
   void _applyLock(int until) {
     _lockTimer?.cancel();
@@ -85,30 +79,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     if (_submitting) return;
 
     final account = trial ? AppConstants.trialAccount : _accountController.text;
-    final password =
-        trial ? AppConstants.trialPassword : _passwordController.text;
+    final password = trial
+        ? AppConstants.trialPassword
+        : _passwordController.text;
 
     if (!trial && (account.trim().isEmpty || password.isEmpty)) {
       await _notice('账号或密码不可为空', kind: GoldDialogKind.error);
       return;
     }
     if (_locked) {
-      final seconds = ((_lockedUntil! - DateTime.now().millisecondsSinceEpoch) /
-              1000)
-          .ceil();
+      final seconds =
+          ((_lockedUntil! - DateTime.now().millisecondsSinceEpoch) / 1000)
+              .ceil();
       await _notice('此账号已被锁定 ${seconds}s', kind: GoldDialogKind.error);
       return;
     }
-    if (!trial && _captchaController.text.trim() != _captcha) {
-      setState(_refreshCaptcha);
-      await _notice('验证码不对', kind: GoldDialogKind.error);
-      return;
-    }
-
     setState(() => _submitting = true);
     String? failure;
     try {
-      final result = await ref.read(authServiceProvider).login(
+      final result = await ref
+          .read(authServiceProvider)
+          .login(
             account: account,
             password: password,
             rememberAccount: _rememberAccount,
@@ -125,12 +116,32 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     } on AuthException catch (error) {
       if (error.lockedUntil != null) _applyLock(error.lockedUntil!);
       failure = error.message;
-      _refreshCaptcha();
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
     if (!mounted || failure == null) return;
     await _notice(failure, kind: GoldDialogKind.error);
+  }
+
+  Future<void> _openExternalUrl(String url) async {
+    final uri = Uri.parse(url);
+    String? errorDetails;
+
+    try {
+      if (await launchUrl(uri, mode: LaunchMode.externalApplication)) return;
+    } on PlatformException catch (error) {
+      errorDetails = error.toString();
+    } on MissingPluginException catch (error) {
+      errorDetails = error.toString();
+    }
+
+    debugPrint(
+      errorDetails == null
+          ? 'Could not open URL: $url'
+          : 'Could not open URL: $url ($errorDetails)',
+    );
+    if (!mounted) return;
+    await _notice('无法打开链接，请检查浏览器配置后重试', kind: GoldDialogKind.error);
   }
 
   Future<void> _confirmTrial() async {
@@ -157,28 +168,82 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     );
   }
 
-  void _showQq() {
-    showGoldDialog(
-      context: context,
-      kind: GoldDialogKind.info,
-      title: '在线QQ',
-      message: 'QQ: 1258081277',
+  void _toggleH5InstallOptions() {
+    setState(() => _showH5InstallOptions = !_showH5InstallOptions);
+  }
+
+  void _dismissH5InstallOptionsOutside(PointerDownEvent event) {
+    if (!_showH5InstallOptions ||
+        _containsGlobalPosition(_h5InstallButtonKey, event.position) ||
+        _containsGlobalPosition(_h5InstallOptionsKey, event.position)) {
+      return;
+    }
+
+    setState(() => _showH5InstallOptions = false);
+  }
+
+  bool _containsGlobalPosition(GlobalKey key, Offset position) {
+    final renderObject = key.currentContext?.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return false;
+
+    final rect = renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    return rect.contains(position);
+  }
+
+  Future<void> _openH5InstallGuide(_InstallGuidePlatform platform) async {
+    setState(() => _showH5InstallOptions = false);
+    final url = switch (platform) {
+      _InstallGuidePlatform.android => 'https://adad.abfd32.cn/mobile/Install/android_sp.html?r=0.6979901995778091',
+      _InstallGuidePlatform.ios => 'https://adad.abfd32.cn/mobile/Install/ios_sp.html?r=0.6765042799219435',
+    };
+    await _openExternalUrl(url);
+  }
+
+  Widget _h5InstallOptions() {
+    const textStyle = TextStyle(
+      color: CasinoColors.gold,
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+    );
+
+    return KeyedSubtree(
+      key: _h5InstallOptionsKey,
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xE61D1912),
+          border: Border.all(color: const Color(0xFFC6A15B)),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _H5InstallOption(
+              icon: Icons.apple_outlined,
+              label: '苹果 H5 安装说明',
+              onPressed: () => _openH5InstallGuide(_InstallGuidePlatform.ios),
+              textStyle: textStyle,
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 6),
+              child: Divider(height: 1, color: Color(0x668A744A)),
+            ),
+            _H5InstallOption(
+              icon: Icons.phone_android_outlined,
+              label: '安卓 H5 安装说明',
+              onPressed: () =>
+                  _openH5InstallGuide(_InstallGuidePlatform.android),
+              textStyle: textStyle,
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  Future<void> _openAgentSite() async {
-    final site = ref.read(lobbyPreloadProvider).setting('agent_website');
-    if (site == null || site.isEmpty) {
-      await _notice('暂无代理网址', kind: GoldDialogKind.error);
-      return;
-    }
-    await Clipboard.setData(ClipboardData(text: site));
-    if (!mounted) return;
-    await _notice('已复制代理网址', kind: GoldDialogKind.success, title: '成功');
-  }
-
-  void _downloadClient() {
-    _notice('客户端请在电脑浏览器下载', kind: GoldDialogKind.info);
+  Future<void> _downloadClient() async {
+    await _openExternalUrl(
+      'https://adad.abfd32.cn/mobile/neworld23/install.html?r=0.4896935546480302',
+    );
   }
 
   InputDecoration _liquidField({
@@ -217,228 +282,212 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return GoldenDarkBackground(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                minHeight: constraints.maxHeight - 48,
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  LiquidGlassCard(
-                    child: Column(
-                          children: [
-                            const TwinklingLogo(width: 100),
-                            const SizedBox(height: 22),
-                            TextField(
-                              controller: _accountController,
-                              textInputAction: TextInputAction.next,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                              ),
-                              decoration: _liquidField(
-                                hint: '请输入账号',
-                                prefixIcon: const Icon(
-                                  Icons.person_outline,
-                                  size: 22,
-                                ),
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: _dismissH5InstallOptionsOutside,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxHeight - 48,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    LiquidGlassCard(
+                      child: Column(
+                        children: [
+                          const TwinklingLogo(width: 200),
+                          const SizedBox(height: 22),
+                          TextField(
+                            controller: _accountController,
+                            textInputAction: TextInputAction.next,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                            ),
+                            decoration: _liquidField(
+                              hint: '请输入账号',
+                              prefixIcon: const Icon(
+                                Icons.person_outline,
+                                size: 22,
                               ),
                             ),
-                            const SizedBox(height: 18),
-                            TextField(
-                              controller: _passwordController,
-                              obscureText: _obscurePassword,
-                              textInputAction: TextInputAction.next,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                              ),
-                              decoration: _liquidField(
-                                hint: '请输入密码',
-                                prefixIcon: const Icon(
-                                  Icons.lock_outline,
-                                  size: 22,
-                                ),
-                                suffixIcon: IconButton(
-                                  onPressed: () => setState(
-                                    () => _obscurePassword = !_obscurePassword,
-                                  ),
-                                  icon: Icon(
-                                    _obscurePassword
-                                        ? Icons.visibility_off_outlined
-                                        : Icons.visibility_outlined,
-                                    size: 22,
-                                  ),
-                                ),
-                              ),
+                          ),
+                          const SizedBox(height: 18),
+                          TextField(
+                            controller: _passwordController,
+                            obscureText: _obscurePassword,
+                            textInputAction: TextInputAction.next,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
                             ),
-                            const SizedBox(height: 18),
-                            Row(
-                              children: [
-                                const Text(
-                                  '验证码',
-                                  style: TextStyle(
-                                    color: CasinoColors.muted,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: TextField(
-                                    controller: _captchaController,
-                                    keyboardType: TextInputType.number,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
-                                    ),
-                                    decoration: _liquidField(hint: '4 位数字'),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                InkWell(
-                                  onTap: () => setState(_refreshCaptcha),
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Container(
-                                    width: 76,
-                                    height: 52,
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0x33C6A15B),
-                                      borderRadius: BorderRadius.circular(8),
-                                      border: Border.all(
-                                        color: const Color(0x99E8C872),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      _captcha,
-                                      style: const TextStyle(
-                                        color: Color(0xFFF6E7C1),
-                                        fontSize: 20,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 2,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Align(
-                              alignment: Alignment.centerLeft,
-                              child: TextButton.icon(
+                            decoration: _liquidField(
+                              hint: '请输入密码',
+                              prefixIcon: const Icon(
+                                Icons.lock_outline,
+                                size: 22,
+                              ),
+                              suffixIcon: IconButton(
                                 onPressed: () => setState(
-                                  () => _rememberAccount = !_rememberAccount,
-                                ),
-                                style: TextButton.styleFrom(
-                                  visualDensity: VisualDensity.standard,
-                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                  padding: const EdgeInsets.fromLTRB(2, 18, 4, 18),
-                                  minimumSize: const Size(0, 56),
+                                  () => _obscurePassword = !_obscurePassword,
                                 ),
                                 icon: Icon(
-                                  _rememberAccount
-                                      ? Icons.check_box
-                                      : Icons.check_box_outline_blank,
-                                  color: CasinoColors.gold,
+                                  _obscurePassword
+                                      ? Icons.visibility_off_outlined
+                                      : Icons.visibility_outlined,
                                   size: 22,
                                 ),
-                                label: const Text(
-                                  '记住账号',
-                                  style: TextStyle(
-                                    color: CasinoColors.muted,
-                                    fontSize: 16,
-                                  ),
+                              ),
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              onPressed: () => setState(
+                                () => _rememberAccount = !_rememberAccount,
+                              ),
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.standard,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                padding: const EdgeInsets.fromLTRB(
+                                  2,
+                                  18,
+                                  4,
+                                  18,
+                                ),
+                                minimumSize: const Size(0, 56),
+                              ),
+                              icon: Icon(
+                                _rememberAccount
+                                    ? Icons.check_box
+                                    : Icons.check_box_outline_blank,
+                                color: CasinoColors.gold,
+                                size: 22,
+                              ),
+                              label: const Text(
+                                '记住账号',
+                                style: TextStyle(
+                                  color: CasinoColors.muted,
+                                  fontSize: 16,
                                 ),
                               ),
                             ),
-                            GoldButton(
-                              label: '登录',
-                              loading: _submitting,
-                              onPressed: _locked ? null : () => _submit(),
+                          ),
+                          // Login button
+                          GoldButton(
+                            label: '登录',
+                            loading: _submitting,
+                            onPressed: _locked ? null : () => _submit(),
+                            colors: const [
+                              Color(0xFFF3D48A),
+                              Color(0xFFC6923E),
+                              Color(0xFF8C6424),
+                            ],
+                            foregroundColor: const Color(0xFF083018),
+                          ),
+                          const SizedBox(height: 24),
+
+                          // Trial button
+                          GoldButton(
+                            label: '试玩',
+                            colors: const [
+                              Color(0xFF347D20),
+                              Color(0xFF286B19),
+                              Color(0xFF205914),
+                            ],
+                            onPressed: _submitting ? null : _confirmTrial,
+                            foregroundColor: Colors.white,
+                          ),
+
+                          const SizedBox(height: 20),
+
+                          // H5 installation instructions
+                          KeyedSubtree(
+                            key: _h5InstallButtonKey,
+                            child: GoldButton(
+                              label: 'H5安装说明',
                               colors: const [
-                                Color(0xFFB7EFC6),
-                                Color(0xFF2EAE55),
-                                Color(0xFF146B34),
+                                Color(0xFF347D20),
+                                Color(0xFF286B19),
+                                Color(0xFF205914),
                               ],
-                              foregroundColor: const Color(0xFF083018),
+                              onPressed: _toggleH5InstallOptions,
+                              foregroundColor: Colors.white,
                             ),
-                            const SizedBox(height: 16),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _FrontButton(
-                                    label: '在线QQ',
-                                    colors: const [
-                                      Color(0xFF123A9A),
-                                      Color(0xFF1E5CFF),
-                                      Color(0xFF0A2E78),
-                                    ],
-                                    onPressed: _showQq,
-                                  ),
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: _FrontButton(
-                                    label: '试玩',
-                                    colors: const [
-                                      Color(0xFF8B1020),
-                                      Color(0xFFC41E3A),
-                                      Color(0xFF6B0A14),
-                                    ],
-                                    onPressed:
-                                        _submitting ? null : _confirmTrial,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _FrontButton(
-                                    label: '代理登录',
-                                    colors: const [
-                                      Color(0xFF8E1458),
-                                      Color(0xFFC2186A),
-                                      Color(0xFF6B1048),
-                                    ],
-                                    onPressed: _openAgentSite,
-                                  ),
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: _FrontButton(
-                                    label: '客户端下载',
-                                    colors: const [
-                                      Color(0xFFA84A00),
-                                      Color(0xFFE07010),
-                                      Color(0xFF8A3E00),
-                                    ],
-                                    onPressed: _downloadClient,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-                            const Text(
-                              '当前状态: 网络投注',
-                              style: TextStyle(
-                                color: Color(0xFFE6E0D4),
-                                fontSize: 14,
-                                letterSpacing: 1.2,
-                              ),
-                            ),
+                          ),
+
+                          if (_showH5InstallOptions) ...[
+                            const SizedBox(height: 6),
+                            _h5InstallOptions(),
                           ],
-                        ),
-                  ),
-                ],
+
+                          const SizedBox(height: 20),
+
+                          // Android app download
+                          GoldButton(
+                            label: '安卓APP下载',
+                            colors: const [
+                              Color(0xFF347D20),
+                              Color(0xFF286B19),
+                              Color(0xFF205914),
+                            ],
+                            onPressed: _downloadClient,
+                            foregroundColor: Colors.white,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _H5InstallOption extends StatelessWidget {
+  const _H5InstallOption({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    required this.textStyle,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+  final TextStyle textStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: 50,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(7),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Row(
+            children: [
+              Icon(icon, color: CasinoColors.gold, size: 17),
+              const SizedBox(width: 8),
+              Expanded(child: Text(label, style: textStyle)),
+              const Icon(
+                Icons.chevron_right,
+                color: CasinoColors.gold,
+                size: 18,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -510,54 +559,6 @@ class LiquidGlassCard extends StatelessWidget {
               child: child,
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _FrontButton extends StatelessWidget {
-  const _FrontButton({
-    required this.label,
-    required this.colors,
-    required this.onPressed,
-  });
-
-  final String label;
-  final List<Color> colors;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: colors,
-        ),
-        border: Border.all(color: const Color(0x99E8C872)),
-      ),
-      child: SizedBox(
-        height: 40,
-        child: TextButton(
-          onPressed: onPressed,
-          style: TextButton.styleFrom(
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
-            textStyle: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.6,
-            ),
-          ),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(label),
-          ),
         ),
       ),
     );

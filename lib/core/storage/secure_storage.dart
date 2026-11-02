@@ -61,6 +61,12 @@ class SecureStorage {
   Future<void> setTrialUser(bool value) =>
       _write(AppConstants.keyTrialUser, value ? 'true' : 'false');
 
+  Future<String> getBalance() async =>
+      await _storage.read(key: AppConstants.keyBalance) ?? '0';
+
+  Future<void> setBalance(String? balance) =>
+      _write(AppConstants.keyBalance, balance);
+
   Future<void> clearSession() async {
     await Future.wait([
       _storage.delete(key: AppConstants.keyAuthToken),
@@ -70,6 +76,7 @@ class SecureStorage {
       _storage.delete(key: AppConstants.keyDisplayName),
       _storage.delete(key: AppConstants.keyOldUserFlg),
       _storage.delete(key: AppConstants.keyTrialUser),
+      _storage.delete(key: AppConstants.keyBalance),
     ]);
   }
 

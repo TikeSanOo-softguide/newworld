@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 /// Application-wide constants for NEWWOLD.
 abstract final class AppConstants {
   static const String brandName = 'NEWWOLD';
@@ -5,17 +7,25 @@ abstract final class AppConstants {
   static const String loginBackgroundAsset = 'assets/images/login_bg.jpg';
   static const String loginBackgroundFallback = 'assets/images/login_bg.png';
 
-  /// JSON API base URL, including the `/api` prefix.
-  /// Override via `--dart-define=API_BASE_URL=...`.
-  static const String apiBaseUrl = String.fromEnvironment(
+  /// Chrome uses this PC. A real phone uses the PC's LAN address.
+  /// Override both via `--dart-define=API_BASE_URL=...`.
+  static const String _apiBaseUrlOverride = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://api.newsworld.local/api',
   );
+
+  static String get apiBaseUrl {
+    if (_apiBaseUrlOverride.isNotEmpty) return _apiBaseUrlOverride;
+    if (kIsWeb) return 'http://localhost:3001/api';
+    return 'http://192.168.10.148:3001/api';
+  }
 
   static const String loginPath = '/auth/player_login';
   static const String logoutPath = '/auth/player_logout';
   static const String verifyPath = '/auth/player_verify';
   static const String changePasswordPath = '/user/change_password';
+  static const String userByIdPath = '/user/users';
+  static const String roomPath = '/user/room';
+  static const String lastRoundStatusPath = '/user/last_round_status';
   static const String publicGamesPath = '/public/user/games';
   static const String publicDesksPath = '/public/user/desks';
   static const String publicCamerasPath = '/public/user/cameras';
@@ -34,4 +44,5 @@ abstract final class AppConstants {
   static const String keyDisplayName = 'auth_display_name';
   static const String keyOldUserFlg = 'old_user_flg';
   static const String keyTrialUser = 'trial_user_flg';
+  static const String keyBalance = 'auth_balance';
 }

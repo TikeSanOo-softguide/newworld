@@ -165,21 +165,29 @@ class GoldButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.loading = false,
+    this.colors = const [
+      Color(0xFFF3D48A),
+      Color(0xFFC6923E),
+      Color(0xFF8C6424),
+    ],
+    this.foregroundColor = const Color(0xFF2A1C08),
   });
 
   final String label;
   final VoidCallback? onPressed;
   final bool loading;
+  final List<Color> colors;
+  final Color foregroundColor;
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(8),
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFFF3D48A), Color(0xFFC6923E), Color(0xFF8C6424)],
+          colors: colors,
         ),
       ),
       child: SizedBox(
@@ -192,7 +200,7 @@ class GoldButton extends StatelessWidget {
             disabledBackgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
             elevation: 0,
-            foregroundColor: const Color(0xFF2A1C08),
+            foregroundColor: foregroundColor,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(8),
             ),
@@ -203,12 +211,12 @@ class GoldButton extends StatelessWidget {
             ),
           ),
           child: loading
-              ? const SizedBox(
+              ? SizedBox(
                   width: 22,
                   height: 22,
                   child: CircularProgressIndicator(
                     strokeWidth: 2.4,
-                    color: Color(0xFF2A1C08),
+                    color: foregroundColor,
                   ),
                 )
               : Text(label),

@@ -177,7 +177,64 @@ class AuthService {
     await logout();
   }
 
-  Future<void> logout() => _secure.clearSession();
+  Future<void> fetchCurrentUser() async {
+    final token = await _secure.getAuthToken();
+    final userId = await _secure.getUserId();
+    if (token == null ||
+        token.isEmpty ||
+        userId == null ||
+        userId.isEmpty) {
+      throw AuthException('服务器未返回访问令牌');
+    }
+
+    try {
+      final json = await _api.getJson(
+        '${AppConstants.userByIdPath}/$userId',
+        token: token,
+      );
+      final data = json['data'];
+      final user = data is Map ? data['user'] : null;
+      if (user is! Map) return;
+      final account = user['account']?.toString();
+      final name = user['name']?.toString();
+      final balance = user['balance']?.toString();
+      if (account != null && account.isNotEmpty) {
+        await _secure.setAccount(account);
+      }
+      if (name != null && name.isNotEmpty) {
+        await _secure.setDisplayName(name);
+      }
+      await _secure.setBalance(
+        balance == null || balance.isEmpty ? '0' : balance,
+      );
+    } on ApiException catch (error) {
+      throw AuthException(
+        error.message.isEmpty ? '读取账号失败' : error.message,
+      );
+    } on http.ClientException {
+      throw AuthException('无法连接服务器，请确认 API 服务已启动');
+    } on TimeoutException {
+      throw AuthException('请求超时，请稍后重试');
+    }
+  }
+
+  Future<void> logout() async {
+    final token = await _secure.getAuthToken();
+    final userId = await _secure.getUserId();
+    if (userId != null && userId.isNotEmpty) {
+      final parsedId = int.tryParse(userId);
+      try {
+        await _api.postJson(
+          AppConstants.logoutPath,
+          token: token,
+          body: {'userId': parsedId ?? userId},
+        );
+      } catch (_) {}
+    }
+    try {
+      await _secure.clearSession();
+    } catch (_) {}
+  }
 
   bool _isOldUser(Object? value) {
     if (value == false || value == 0 || value == '0' || value == 'false') {

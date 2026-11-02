@@ -56,7 +56,7 @@ class _LoadingPageState extends ConsumerState<LoadingPage> {
     }
     final oldUser = await secure.getOldUserFlag();
     if (!mounted) return;
-    context.go(oldUser ? AppRoutes.session : AppRoutes.changePassword);
+    context.go(oldUser ? AppRoutes.lobby : AppRoutes.changePassword);
   }
 
   @override

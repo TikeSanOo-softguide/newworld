@@ -11,6 +11,7 @@ import '../../core/constants/app_constants.dart';
 import '../../core/router/app_router.dart';
 import '../../core/storage/local_storage.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/app_dialog.dart';
 import '../../core/widgets/twinkling_logo.dart';
 import '../preload/lobby_preload.dart';
 import 'auth_service.dart';
@@ -32,7 +33,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   bool _obscurePassword = true;
   bool _submitting = false;
   String _captcha = '';
-  String? _errorMessage;
   int? _lockedUntil;
   Timer? _lockTimer;
 
@@ -73,10 +73,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       if (!mounted) return;
       if (!_locked) {
         _lockTimer?.cancel();
-        setState(() {
-          _lockedUntil = null;
-          _errorMessage = null;
-        });
+        setState(() => _lockedUntil = null);
       } else {
         setState(() {});
       }
@@ -92,26 +89,24 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         trial ? AppConstants.trialPassword : _passwordController.text;
 
     if (!trial && (account.trim().isEmpty || password.isEmpty)) {
-      setState(() => _errorMessage = '账号或密码不可为空');
+      await _notice('账号或密码不可为空', kind: GoldDialogKind.error);
       return;
     }
     if (_locked) {
-      setState(() => _errorMessage = '此账号已被锁定');
+      final seconds = ((_lockedUntil! - DateTime.now().millisecondsSinceEpoch) /
+              1000)
+          .ceil();
+      await _notice('此账号已被锁定 ${seconds}s', kind: GoldDialogKind.error);
       return;
     }
     if (!trial && _captchaController.text.trim() != _captcha) {
-      setState(() {
-        _errorMessage = '验证码不对';
-        _refreshCaptcha();
-      });
+      setState(_refreshCaptcha);
+      await _notice('验证码不对', kind: GoldDialogKind.error);
       return;
     }
 
-    setState(() {
-      _submitting = true;
-      _errorMessage = null;
-    });
-
+    setState(() => _submitting = true);
+    String? failure;
     try {
       final result = await ref.read(authServiceProvider).login(
             account: account,
@@ -120,106 +115,70 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             trial: trial,
           );
       if (!mounted) return;
-      context.go(
-        result.oldUserFlg ? AppRoutes.session : AppRoutes.changePassword,
-      );
-    } on AuthException catch (error) {
+      if (!result.oldUserFlg) {
+        context.go(AppRoutes.changePassword);
+        return;
+      }
+      await ref.read(authServiceProvider).fetchCurrentUser();
       if (!mounted) return;
+      context.go(AppRoutes.agreement);
+    } on AuthException catch (error) {
       if (error.lockedUntil != null) _applyLock(error.lockedUntil!);
-      setState(() {
-        _errorMessage = error.message;
-        _refreshCaptcha();
-      });
+      failure = error.message;
+      _refreshCaptcha();
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+    if (!mounted || failure == null) return;
+    await _notice(failure, kind: GoldDialogKind.error);
   }
 
   Future<void> _confirmTrial() async {
-    final accepted = await showDialog<bool>(
+    final accepted = await showGoldDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1B140C),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-            side: const BorderSide(color: CasinoColors.goldDeep),
-          ),
-          title: const Text(
-            '提示',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: CasinoColors.gold),
-          ),
-          content: const Text(
-            '试玩账号为免费账号，不可下分汇款。确定要用试玩账号登录？',
-            style: TextStyle(color: Colors.white, height: 1.5),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('确定'),
-            ),
-          ],
-        );
-      },
+      kind: GoldDialogKind.confirm,
+      title: '提示',
+      message: '试玩账号为免费账号，不可下分汇款。确定要用试玩账号登录？',
+      cancelLabel: '取消',
     );
-    if (accepted == true) await _submit(trial: true);
+    if (accepted) await _submit(trial: true);
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+  Future<void> _notice(
+    String message, {
+    required GoldDialogKind kind,
+    String title = '提示',
+  }) {
+    return showGoldDialog(
+      context: context,
+      kind: kind,
+      title: title,
+      message: message,
     );
   }
 
   void _showQq() {
-    showDialog<void>(
+    showGoldDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF1B140C),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-            side: const BorderSide(color: CasinoColors.goldDeep),
-          ),
-          title: const Text(
-            '在线QQ',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: CasinoColors.gold),
-          ),
-          content: const Text(
-            'QQ: 1258081277',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('确定'),
-            ),
-          ],
-        );
-      },
+      kind: GoldDialogKind.info,
+      title: '在线QQ',
+      message: 'QQ: 1258081277',
     );
   }
 
   Future<void> _openAgentSite() async {
     final site = ref.read(lobbyPreloadProvider).setting('agent_website');
     if (site == null || site.isEmpty) {
-      _showMessage('暂无代理网址');
+      await _notice('暂无代理网址', kind: GoldDialogKind.error);
       return;
     }
     await Clipboard.setData(ClipboardData(text: site));
     if (!mounted) return;
-    _showMessage('已复制代理网址');
+    await _notice('已复制代理网址', kind: GoldDialogKind.success, title: '成功');
   }
 
   void _downloadClient() {
-    _showMessage('客户端请在电脑浏览器下载');
+    _notice('客户端请在电脑浏览器下载', kind: GoldDialogKind.info);
   }
 
   InputDecoration _liquidField({
@@ -235,30 +194,28 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       hintText: hint,
       prefixIcon: prefixIcon,
       suffixIcon: suffixIcon,
-      isDense: true,
-      prefixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 32),
+      prefixIconConstraints: const BoxConstraints(minWidth: 48, minHeight: 48),
       filled: true,
-      fillColor: const Color(0x66140F0A),
-      hintStyle: const TextStyle(color: Color(0x99F4E7C3), fontSize: 14),
+      fillColor: const Color(0x8016100C),
+      hintStyle: const TextStyle(
+        color: Color(0xB3F4E7C3),
+        fontSize: 16,
+        height: 1.2,
+      ),
       prefixIconColor: CasinoColors.gold,
       suffixIconColor: CasinoColors.gold,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
       border: border,
       enabledBorder: border,
       focusedBorder: const OutlineInputBorder(
         borderRadius: BorderRadius.all(Radius.circular(8)),
-        borderSide: BorderSide(color: Color(0xCCE8C872), width: 1.2),
+        borderSide: BorderSide(color: Color(0xE6E8C872), width: 1.4),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final lockSeconds = _locked
-        ? ((_lockedUntil! - DateTime.now().millisecondsSinceEpoch) / 1000)
-            .ceil()
-        : 0;
-
     return GoldenDarkBackground(
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -274,26 +231,38 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   LiquidGlassCard(
                     child: Column(
                           children: [
-                            const TwinklingLogo(width: 92),
-                            const SizedBox(height: 16),
+                            const TwinklingLogo(width: 100),
+                            const SizedBox(height: 22),
                             TextField(
                               controller: _accountController,
                               textInputAction: TextInputAction.next,
-                              style: const TextStyle(color: Colors.white),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                              ),
                               decoration: _liquidField(
                                 hint: '请输入账号',
-                                prefixIcon: const Icon(Icons.person_outline, size: 18),
+                                prefixIcon: const Icon(
+                                  Icons.person_outline,
+                                  size: 22,
+                                ),
                               ),
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 18),
                             TextField(
                               controller: _passwordController,
                               obscureText: _obscurePassword,
                               textInputAction: TextInputAction.next,
-                              style: const TextStyle(color: Colors.white),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                              ),
                               decoration: _liquidField(
                                 hint: '请输入密码',
-                                prefixIcon: const Icon(Icons.lock_outline, size: 18),
+                                prefixIcon: const Icon(
+                                  Icons.lock_outline,
+                                  size: 22,
+                                ),
                                 suffixIcon: IconButton(
                                   onPressed: () => setState(
                                     () => _obscurePassword = !_obscurePassword,
@@ -302,47 +271,53 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     _obscurePassword
                                         ? Icons.visibility_off_outlined
                                         : Icons.visibility_outlined,
-                                    size: 18,
+                                    size: 22,
                                   ),
                                 ),
                               ),
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 18),
                             Row(
                               children: [
                                 const Text(
                                   '验证码',
-                                  style: TextStyle(color: CasinoColors.muted),
+                                  style: TextStyle(
+                                    color: CasinoColors.muted,
+                                    fontSize: 15,
+                                  ),
                                 ),
-                                const SizedBox(width: 10),
+                                const SizedBox(width: 12),
                                 Expanded(
                                   child: TextField(
                                     controller: _captchaController,
                                     keyboardType: TextInputType.number,
-                                    style: const TextStyle(color: Colors.white),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                    ),
                                     decoration: _liquidField(hint: '4 位数字'),
                                   ),
                                 ),
-                                const SizedBox(width: 10),
+                                const SizedBox(width: 12),
                                 InkWell(
                                   onTap: () => setState(_refreshCaptcha),
                                   borderRadius: BorderRadius.circular(8),
                                   child: Container(
-                                    width: 68,
-                                    height: 40,
+                                    width: 76,
+                                    height: 52,
                                     alignment: Alignment.center,
                                     decoration: BoxDecoration(
-                                      color: const Color(0x33FFFFFF),
+                                      color: const Color(0x33C6A15B),
                                       borderRadius: BorderRadius.circular(8),
                                       border: Border.all(
-                                        color: const Color(0x66FFFFFF),
+                                        color: const Color(0x99E8C872),
                                       ),
                                     ),
                                     child: Text(
                                       _captcha,
                                       style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 18,
+                                        color: Color(0xFFF6E7C1),
+                                        fontSize: 20,
                                         fontWeight: FontWeight.w700,
                                         letterSpacing: 2,
                                       ),
@@ -358,10 +333,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                   () => _rememberAccount = !_rememberAccount,
                                 ),
                                 style: TextButton.styleFrom(
-                                  visualDensity: VisualDensity.compact,
+                                  visualDensity: VisualDensity.standard,
                                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                  padding: const EdgeInsets.fromLTRB(4, 16, 4, 16),
-                                  minimumSize: const Size(0, 52),
+                                  padding: const EdgeInsets.fromLTRB(2, 18, 4, 18),
+                                  minimumSize: const Size(0, 56),
                                 ),
                                 icon: Icon(
                                   _rememberAccount
@@ -379,26 +354,18 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                 ),
                               ),
                             ),
-                            if (_errorMessage != null)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 8),
-                                child: Text(
-                                  _locked
-                                      ? '此账号已被锁定 ${lockSeconds}s'
-                                      : _errorMessage!,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: Color(0xFFFFB4B4),
-                                    height: 1.4,
-                                  ),
-                                ),
-                              ),
                             GoldButton(
                               label: '登录',
                               loading: _submitting,
                               onPressed: _locked ? null : () => _submit(),
+                              colors: const [
+                                Color(0xFFB7EFC6),
+                                Color(0xFF2EAE55),
+                                Color(0xFF146B34),
+                              ],
+                              foregroundColor: const Color(0xFF083018),
                             ),
-                            const SizedBox(height: 12),
+                            const SizedBox(height: 16),
                             Row(
                               children: [
                                 Expanded(
@@ -412,7 +379,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     onPressed: _showQq,
                                   ),
                                 ),
-                                const SizedBox(width: 10),
+                                const SizedBox(width: 14),
                                 Expanded(
                                   child: _FrontButton(
                                     label: '试玩',
@@ -427,7 +394,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 10),
+                            const SizedBox(height: 14),
                             Row(
                               children: [
                                 Expanded(
@@ -441,7 +408,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                     onPressed: _openAgentSite,
                                   ),
                                 ),
-                                const SizedBox(width: 10),
+                                const SizedBox(width: 14),
                                 Expanded(
                                   child: _FrontButton(
                                     label: '客户端下载',
@@ -455,13 +422,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 14),
+                            const SizedBox(height: 20),
                             const Text(
                               '当前状态: 网络投注',
                               style: TextStyle(
                                 color: Color(0xFFE6E0D4),
                                 fontSize: 14,
-                                letterSpacing: 1,
+                                letterSpacing: 1.2,
                               ),
                             ),
                           ],
@@ -539,7 +506,7 @@ class LiquidGlassCard extends StatelessWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 32, 16, 14),
+              padding: const EdgeInsets.fromLTRB(22, 36, 22, 24),
               child: child,
             ),
           ],
@@ -573,7 +540,7 @@ class _FrontButton extends StatelessWidget {
         border: Border.all(color: const Color(0x99E8C872)),
       ),
       child: SizedBox(
-        height: 36,
+        height: 40,
         child: TextButton(
           onPressed: onPressed,
           style: TextButton.styleFrom(
@@ -582,7 +549,7 @@ class _FrontButton extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             textStyle: const TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: FontWeight.w700,
               letterSpacing: 0.6,
             ),

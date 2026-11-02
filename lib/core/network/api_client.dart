@@ -79,6 +79,21 @@ class ApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> patchJson(
+    String path, {
+    Map<String, dynamic>? body,
+    String? token,
+    String? csrfToken,
+  }) {
+    return _send(
+      () => client.patch(
+        _uri(path),
+        headers: _headers(token: token, csrfToken: csrfToken),
+        body: body == null ? null : jsonEncode(body),
+      ),
+    );
+  }
+
   Future<Map<String, dynamic>> putJson(
     String path, {
     Map<String, dynamic>? body,
@@ -122,6 +137,8 @@ class ApiClient {
       throw ApiException(
         statusCode: response.statusCode,
         message: chineseMessage(rawMessage),
+        code: decoded['error']?.toString(),
+        supersededIp: decoded['supersededIp']?.toString(),
         lockedUntil: locked is num ? locked.toInt() : null,
       );
     }
@@ -140,11 +157,15 @@ class ApiException implements Exception {
   ApiException({
     required this.statusCode,
     required this.message,
+    this.code,
+    this.supersededIp,
     this.lockedUntil,
   });
 
   final int statusCode;
   final String message;
+  final String? code;
+  final String? supersededIp;
   final int? lockedUntil;
 
   @override

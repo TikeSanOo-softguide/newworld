@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/router/app_router.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/app_dialog.dart';
 import 'auth_service.dart';
 
 class ChangePasswordPage extends ConsumerStatefulWidget {
@@ -19,7 +20,6 @@ class _ChangePasswordPageState extends ConsumerState<ChangePasswordPage> {
   final _confirmController = TextEditingController();
   bool _obscure = true;
   bool _submitting = false;
-  String? _errorMessage;
 
   @override
   void dispose() {
@@ -29,23 +29,39 @@ class _ChangePasswordPageState extends ConsumerState<ChangePasswordPage> {
   }
 
   Future<void> _submit() async {
-    setState(() {
-      _submitting = true;
-      _errorMessage = null;
-    });
+    setState(() => _submitting = true);
+    String? failure;
+    var changed = false;
     try {
       await ref.read(authServiceProvider).changePassword(
             newPassword: _passwordController.text,
             confirmPassword: _confirmController.text,
           );
-      if (!mounted) return;
-      context.go(AppRoutes.login);
+      changed = true;
     } on AuthException catch (error) {
-      if (!mounted) return;
-      setState(() => _errorMessage = error.message);
+      failure = error.message;
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+    if (!mounted) return;
+    if (failure != null) {
+      await showGoldDialog(
+        context: context,
+        kind: GoldDialogKind.error,
+        title: '提示',
+        message: failure,
+      );
+      return;
+    }
+    if (!changed) return;
+    await showGoldDialog(
+      context: context,
+      kind: GoldDialogKind.success,
+      title: '成功',
+      message: '密码已修改，请重新登录',
+    );
+    if (!mounted) return;
+    context.go(AppRoutes.login);
   }
 
   @override
@@ -97,14 +113,6 @@ class _ChangePasswordPageState extends ConsumerState<ChangePasswordPage> {
               ),
             ),
           ),
-          if (_errorMessage != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              _errorMessage!,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xFFFFB4B4)),
-            ),
-          ],
           const SizedBox(height: 22),
           GoldButton(
             label: '确认修改',
@@ -137,6 +145,7 @@ class _SessionPageState extends ConsumerState<SessionPage> {
     return _SessionView(
       account: await storage.getAccount() ?? '',
       name: await storage.getDisplayName(),
+      trial: await storage.getTrialUser(),
     );
   }
 
@@ -167,6 +176,17 @@ class _SessionPageState extends ConsumerState<SessionPage> {
                   view == null ? '正在读取账号' : '已登录 ${view.account}',
                   style: const TextStyle(color: Colors.white, fontSize: 18),
                 ),
+                if (view?.trial == true) ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    '试玩中',
+                    style: TextStyle(
+                      color: Color(0xFFFFB4B4),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
                 if (view?.name != null && view!.name!.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Text(
@@ -197,8 +217,9 @@ class _SessionPageState extends ConsumerState<SessionPage> {
 }
 
 class _SessionView {
-  const _SessionView({required this.account, this.name});
+  const _SessionView({required this.account, this.name, this.trial = false});
 
   final String account;
   final String? name;
+  final bool trial;
 }

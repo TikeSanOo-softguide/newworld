@@ -144,10 +144,12 @@ class _LobbyAnnouncementBannerState extends State<LobbyAnnouncementBanner>
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                   );
+                  final textScaler = MediaQuery.textScalerOf(context);
                   final textPainter = TextPainter(
                     text: TextSpan(text: message, style: style),
                     maxLines: 1,
                     textDirection: TextDirection.ltr,
+                    textScaler: textScaler,
                   )..layout();
                   if (textPainter.width <= constraints.maxWidth) {
                     return Align(
@@ -168,10 +170,31 @@ class _LobbyAnnouncementBannerState extends State<LobbyAnnouncementBanner>
                           minWidth: travel + textPainter.width,
                           maxWidth: travel + textPainter.width,
                           child: Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(message, maxLines: 1, style: style),
+                              SizedBox(
+                                width: textPainter.width,
+                                child: Text(
+                                  message,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.clip,
+                                  textScaler: textScaler,
+                                  style: style,
+                                ),
+                              ),
                               const SizedBox(width: gap),
-                              Text(message, maxLines: 1, style: style),
+                              SizedBox(
+                                width: textPainter.width,
+                                child: Text(
+                                  message,
+                                  maxLines: 1,
+                                  softWrap: false,
+                                  overflow: TextOverflow.clip,
+                                  textScaler: textScaler,
+                                  style: style,
+                                ),
+                              ),
                             ],
                           ),
                         ),

@@ -8,12 +8,14 @@ import '../../core/constants/app_constants.dart';
 import '../../core/network/api_client.dart';
 import '../../core/storage/local_storage.dart';
 import '../../core/storage/secure_storage.dart';
+import '../lobby/realtime/lobby_socket_service.dart';
 
 final authServiceProvider = Provider<AuthService>((ref) {
   return AuthService(
     apiClient: ref.watch(apiClientProvider),
     secureStorage: ref.watch(secureStorageProvider),
     localStorage: ref.watch(localStorageProvider),
+    lobbySocketService: ref.watch(lobbySocketServiceProvider),
   );
 });
 
@@ -52,13 +54,16 @@ class AuthService {
     required ApiClient apiClient,
     required SecureStorage secureStorage,
     required LocalStorage localStorage,
-  })  : _api = apiClient,
-        _secure = secureStorage,
-        _local = localStorage;
+    required LobbySocketService lobbySocketService,
+  }) : _api = apiClient,
+       _secure = secureStorage,
+       _local = localStorage,
+       _lobbySocket = lobbySocketService;
 
   final ApiClient _api;
   final SecureStorage _secure;
   final LocalStorage _local;
+  final LobbySocketService _lobbySocket;
 
   Future<AuthResult> login({
     required String account,
@@ -92,7 +97,8 @@ class AuthService {
       final resolvedAccount = json['account']?.toString() ?? trimmed;
       final name = json['name']?.toString();
       final oldUser = _isOldUser(json['old_user_flg']);
-      final trialUser = trial ||
+      final trialUser =
+          trial ||
           json['trial_user_flg'] == true ||
           json['trial_user_flg'] == 1;
 
@@ -123,14 +129,13 @@ class AuthService {
       if (error.lockedUntil != null || error.message.contains('已被锁定')) {
         throw AuthException(
           '此账号已被锁定',
-          lockedUntil: error.lockedUntil ??
+          lockedUntil:
+              error.lockedUntil ??
               DateTime.now().millisecondsSinceEpoch +
                   const Duration(minutes: 3).inMilliseconds,
         );
       }
-      throw AuthException(
-        error.message.isEmpty ? '登录失败，请稍后重试' : error.message,
-      );
+      throw AuthException(error.message.isEmpty ? '登录失败，请稍后重试' : error.message);
     } on http.ClientException {
       throw AuthException('无法连接服务器，请确认 API 服务已启动');
     } on TimeoutException {
@@ -165,9 +170,7 @@ class AuthService {
         },
       );
     } on ApiException catch (error) {
-      throw AuthException(
-        error.message.isEmpty ? '修改失败，请稍后重试' : error.message,
-      );
+      throw AuthException(error.message.isEmpty ? '修改失败，请稍后重试' : error.message);
     } on http.ClientException {
       throw AuthException('无法连接服务器，请确认 API 服务已启动');
     } on TimeoutException {
@@ -180,10 +183,7 @@ class AuthService {
   Future<void> fetchCurrentUser() async {
     final token = await _secure.getAuthToken();
     final userId = await _secure.getUserId();
-    if (token == null ||
-        token.isEmpty ||
-        userId == null ||
-        userId.isEmpty) {
+    if (token == null || token.isEmpty || userId == null || userId.isEmpty) {
       throw AuthException('服务器未返回访问令牌');
     }
 
@@ -208,9 +208,7 @@ class AuthService {
         balance == null || balance.isEmpty ? '0' : balance,
       );
     } on ApiException catch (error) {
-      throw AuthException(
-        error.message.isEmpty ? '读取账号失败' : error.message,
-      );
+      throw AuthException(error.message.isEmpty ? '读取账号失败' : error.message);
     } on http.ClientException {
       throw AuthException('无法连接服务器，请确认 API 服务已启动');
     } on TimeoutException {
@@ -219,6 +217,7 @@ class AuthService {
   }
 
   Future<void> logout() async {
+    _lobbySocket.disconnect();
     final token = await _secure.getAuthToken();
     final userId = await _secure.getUserId();
     if (userId != null && userId.isNotEmpty) {

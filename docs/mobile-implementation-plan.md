@@ -13,6 +13,12 @@ At the start of Phase 1, `git status --short` showed these pre-existing changes,
 
 No reset, revert, or overwrite was performed. Phase 1 only updates documentation and adds the two requested verification documents.
 
+## Phase 4 - Flutter Socket.IO Integration
+
+The Flutter lobby uses the backend's `/socket.io` endpoint, member JWT handshake authentication, and `desk:{deskId}:updateResult` events. A single Riverpod-owned `socket_io_client` 3.1.6 service validates and deduplicates round results, then updates the lobby's existing result data so all six Phase 2/3 roadmaps recalculate through their existing algorithms and painters. Reconnect and foreground resume synchronize from authenticated `/api/user/desks?site_name=user` history; logout and lobby disposal disconnect the client.
+
+Phase 4 does not modify the Node.js backend or React frontend. Production native login remains blocked on the already documented backend guarantee for returning `accessToken` over secure requests without an Origin header.
+
 ## Scope and Role
 
 The mobile dashboard is for the existing `member` role. It must use `POST /api/auth/player_login` and the member API mount (`/api/user`). Do not call `/api/auth/phone_user_login` or `/api/phone_user`, and do not adopt phone-user business rules. The backend's `/api/user` role list includes both `member` and `phone_user`; this plan uses it only with a member JWT.

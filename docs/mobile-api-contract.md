@@ -53,17 +53,22 @@ Do not change backend ordering until a fixture made from a real API response is 
 ## Socket.IO Contract
 
 - Transport endpoint path: `/socket.io`.
-- Authentication: send the existing member JWT as `handshake.auth.token`. Backend socket auth verifies JWT signature/expiry and `token_version`, then attaches `{id, role, account}` to the socket.
+- Flutter uses `socket_io_client` 3.1.6 and connects to the API origin (the configured API base URL without its trailing `/api`).
+- Authentication: send the existing member JWT as `handshake.auth.token` and `audience: "member"`. Backend socket auth verifies JWT signature/expiry and `token_version`, then attaches `{id, role, account}` to the socket.
+- Transport order is polling then WebSocket, matching the backend's polling-first server configuration. The path is `/socket.io`, connection timeout is 10 seconds, and automatic reconnection retries indefinitely with a 1-second initial delay and a 3-second maximum delay.
 - Existing backend-to-client events include:
   - `desk:{deskId}:updateStatus` (operator status payload is forwarded as provided; React uses string statuses).
   - `desk:{deskId}:updateTimer` (countdown value).
-  - `desk:{deskId}:updateResult` (round result payload).
+  - `desk:{deskId}:updateResult` (operator payload is forwarded unchanged: `{round_id, result, userNetAmounts?}`; result is the joined result-key string).
   - `desk:{deskId}:dealCard` and `desk:{deskId}:deleteLastCard`.
   - `desk:{deskId}:finish-session` and `desk:{deskId}:invalid-game`.
   - `member_balance:change` and `online_player:force_logout` from member-related server utilities.
 - Backend broadcasts these events globally; the reviewed code does not establish per-desk room subscriptions. Filter per-desk events in Flutter by desk ID.
-- Current Flutter dependencies have `web_socket_channel`, which is not the Socket.IO protocol client. A compatible Dart Socket.IO dependency must be selected and approved before live events are implemented.
-- On socket reconnect, reload authenticated desk/status/history data because events may have been missed. Surface superseded/invalid JWT state and return to member login.
+- Flutter validates positive `round_id` and non-empty `result`, converts the payload to a typed round-result model, and deduplicates by `round_id`. The model's `key` is the event's `result` value.
+- The member `GET /api/user/desks?site_name=user` response remains the initial/recovery history source. Each history item has `{round_id, key, round_no}`. On every successful connect/reconnect and foreground resume, Flutter reloads this authenticated history, merges results for the same active session, and replaces history when the desk's active session changes. No event replay is assumed.
+- One Riverpod-owned socket service is reused for the lobby. It owns connection listeners, result subscriptions, reconnection, background/foreground disconnect/reconnect, and disposal; logout disconnects it. The lobby subscribes to the typed result stream and updates the existing six roadmap calculations without changing their algorithms or painters.
+- Socket authentication errors trigger the existing member verification flow; invalid or superseded sessions return to login. Transient errors are surfaced while automatic reconnection continues.
+- **Unresolved production login requirement:** `player_login` does not guarantee `accessToken` for native HTTPS requests without an Origin header. The Flutter auth flow already requires that token, so Socket.IO cannot authenticate until the backend exposes it consistently for native clients. This phase intentionally does not modify backend behavior.
 
 ## Missing or Unclear Backend Requirements
 

@@ -50,6 +50,29 @@ void main() {
       expect(find.text('暂无公告'), findsOneWidget);
     });
 
+    testWidgets('announcement marquee stays within bounds with large text', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+          child: const MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 320,
+                child: LobbyAnnouncementBanner(
+                  text: '实时连接失败，正在尝试重新连接，请稍后重试并检查网络连接',
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('category tabs return the selected real category id', (
       tester,
     ) async {

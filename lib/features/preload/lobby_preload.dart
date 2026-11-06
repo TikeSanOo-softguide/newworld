@@ -1,12 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/network/api_client.dart';
+import '../lobby/models/lobby_round_result.dart';
 
 final lobbyPreloadProvider =
     NotifierProvider<LobbyPreloadNotifier, LobbySnapshot>(
-  LobbyPreloadNotifier.new,
-);
+      LobbyPreloadNotifier.new,
+    );
 
 final preloadLoaderProvider = Provider<PreloadLoader>((ref) {
   return ApiPreloadLoader(ref.watch(apiClientProvider));
@@ -17,6 +19,89 @@ class LobbyPreloadNotifier extends Notifier<LobbySnapshot> {
   LobbySnapshot build() => LobbySnapshot.empty;
 
   void replace(LobbySnapshot snapshot) => state = snapshot;
+
+  void upsertResult(LobbyRoundResult result) {
+    final desks = state.desks
+        .map((desk) {
+          if (_asInt(desk['id']) != result.deskId) return desk;
+          final current = _parseDeskResults(result.deskId, desk['results']);
+          final merged = mergeLobbyRoundResults(current, [result]);
+          return {
+            ...desk,
+            'results': merged.map((item) => item.toApiJson()).toList(),
+          };
+        })
+        .toList(growable: false);
+    state = _copyWithDesks(desks);
+  }
+
+  void synchronizeDeskResults({
+    required Map<int, List<LobbyRoundResult>> histories,
+    required Map<int, int?> sessionIds,
+  }) {
+    final desks = state.desks
+        .map((desk) {
+          final deskId = _asInt(desk['id']);
+          if (deskId == null || !histories.containsKey(deskId)) return desk;
+          final currentSessionId = _sessionId(desk['session']);
+          final nextSessionId = sessionIds[deskId];
+          final sameSession =
+              currentSessionId != null && currentSessionId == nextSessionId;
+          final current = sameSession
+              ? _parseDeskResults(deskId, desk['results'])
+              : const <LobbyRoundResult>[];
+          final results = mergeLobbyRoundResults(current, histories[deskId]!);
+          return {
+            ...desk,
+            'session': nextSessionId == null
+                ? null
+                : {
+                    if (desk['session'] is Map)
+                      ...Map<String, dynamic>.from(desk['session'] as Map),
+                    'id': nextSessionId,
+                  },
+            'results': results.map((item) => item.toApiJson()).toList(),
+          };
+        })
+        .toList(growable: false);
+    state = _copyWithDesks(desks);
+  }
+
+  LobbySnapshot _copyWithDesks(List<Map<String, dynamic>> desks) =>
+      LobbySnapshot(
+        games: state.games,
+        desks: desks,
+        cameras: state.cameras,
+        parameterSettings: state.parameterSettings,
+        failures: state.failures,
+      );
+}
+
+List<LobbyRoundResult> _parseDeskResults(int deskId, Object? raw) {
+  if (raw is! List) return const [];
+  final results = <LobbyRoundResult>[];
+  for (final item in raw) {
+    try {
+      results.add(LobbyRoundResult.fromApi(deskId, item));
+    } on FormatException catch (error) {
+      debugPrint('Ignoring malformed API result for desk $deskId: $error');
+    }
+  }
+  return results;
+}
+
+int? _sessionId(Object? raw) {
+  final session = raw is Map ? raw : null;
+  final id = session?['id'];
+  if (id is int) return id;
+  if (id is num) return id.toInt();
+  return int.tryParse(id?.toString() ?? '');
+}
+
+int? _asInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '');
 }
 
 class LobbySnapshot {
@@ -97,9 +182,10 @@ class ApiPreloadLoader implements PreloadLoader {
           AppConstants.publicDesksPath,
           query: const {'site_name': 'user'},
         );
-        return extractNamedList(json, 'desks')
-            .where(isOnlineBettingDesk)
-            .toList();
+        return extractNamedList(
+          json,
+          'desks',
+        ).where(isOnlineBettingDesk).toList();
       }),
       run('cameras', () async {
         final json = await _api.getJson(AppConstants.publicCamerasPath);

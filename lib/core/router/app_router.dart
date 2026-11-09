@@ -6,6 +6,7 @@ import '../../features/auth/agreement_page.dart';
 import '../../features/auth/login_page.dart';
 import '../../features/auth/session_pages.dart';
 import '../../features/loading/loading_page.dart';
+import '../../features/game_detail/baccarat_game_detail_page.dart';
 import '../../features/lobby/lobby_page.dart';
 import '../../features/settings/settings_page.dart';
 
@@ -15,6 +16,7 @@ abstract final class AppRoutes {
   static const changePassword = '/change-password';
   static const agreement = '/agreement';
   static const lobby = '/lobby';
+  static const baccaratDetail = '/lobby/desk';
   static const settings = '/settings';
   static const session = '/session';
 }
@@ -46,8 +48,14 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: AppRoutes.lobby,
         name: 'lobby',
-        builder: (context, state) => LobbyPage(
-          showNotice: state.uri.queryParameters['notice'] == '1',
+        builder: (context, state) =>
+            LobbyPage(showNotice: state.uri.queryParameters['notice'] == '1'),
+      ),
+      GoRoute(
+        path: '${AppRoutes.baccaratDetail}/:deskId',
+        name: 'baccaratDetail',
+        builder: (context, state) => BaccaratGameDetailPage(
+          deskId: int.tryParse(state.pathParameters['deskId'] ?? '') ?? 0,
         ),
       ),
       GoRoute(
@@ -61,8 +69,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const SessionPage(),
       ),
     ],
-    errorBuilder: (context, state) => Scaffold(
-      body: Center(child: Text('页面不存在：${state.uri}')),
-    ),
+    errorBuilder: (context, state) =>
+        Scaffold(body: Center(child: Text('页面不存在：${state.uri}'))),
   );
 });

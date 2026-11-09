@@ -126,6 +126,45 @@ void main() {
     );
 
     test(
+      'parses detail timer, status, pool, and session socket updates',
+      () async {
+        final fake = _FakeSocket();
+        final service = LobbySocketService(
+          apiBaseUrl: 'https://api.example.test/api',
+          socketFactory: (_, _) => fake,
+        );
+        final updates = <LobbyDeskUpdate>[];
+        final errors = <String>[];
+        final updateSubscription = service.deskUpdates.listen(updates.add);
+        final errorSubscription = service.protocolErrors.listen(errors.add);
+
+        service.connect(token: 'member-jwt', deskIds: [4]);
+        fake.trigger('desk:4:updateTimer', '15');
+        fake.trigger('desk:4:updateStatus', {'status': 'betting'});
+        fake.trigger('desk:4:roundPoolTotals', {
+          'round_id': 9,
+          'pool_type': 'baccarat',
+          'totals': {'banker': 500},
+          'display_totals': {'banker': 500},
+        });
+        fake.trigger('desk:4:finish-session', {'session_id': 3});
+        fake.trigger('desk:4:updateTimer', 'invalid');
+        fake.trigger('desk:5:updateTimer', 10);
+
+        expect(updates, hasLength(4));
+        expect((updates[0] as LobbyDeskTimerUpdate).remainingSeconds, 15);
+        expect((updates[1] as LobbyDeskStatusUpdate).status, 'betting');
+        expect((updates[2] as LobbyDeskPoolTotalsUpdate).roundId, 9);
+        expect(updates[3], isA<LobbyDeskSessionFinished>());
+        expect(errors, hasLength(1));
+
+        await updateSubscription.cancel();
+        await errorSubscription.cancel();
+        service.dispose();
+      },
+    );
+
+    test(
       'socket results update provider history and all six roadmaps',
       () async {
         final container = ProviderContainer();

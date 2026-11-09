@@ -10,47 +10,125 @@ class RoadmapGridView extends StatelessWidget {
     required this.grid,
     required this.cellWidth,
     required this.cellHeight,
+    this.visibleRows,
+    this.visibleColumns,
+    this.squareCells = false,
   });
 
   final RoadmapGrid grid;
   final double cellWidth;
   final double cellHeight;
+  final int? visibleRows;
+  final int? visibleColumns;
+  final bool squareCells;
 
-  int get _visualRows => switch (grid.type) {
-    RoadmapType.bigEye || RoadmapType.small || RoadmapType.cockroach => 3,
-    _ => grid.rowCount,
-  };
+  int get _visualRows =>
+      visibleRows ??
+      switch (grid.type) {
+        RoadmapType.bigEye || RoadmapType.small || RoadmapType.cockroach => 3,
+        _ => grid.rowCount,
+      };
 
   @override
   Widget build(BuildContext context) {
-    final height = cellHeight * _visualRows;
+    final defaultHeight = cellHeight * _visualRows;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final contentWidth = math.max(
-          constraints.maxWidth,
-          cellWidth * grid.columnCount,
-        );
-        return SizedBox(
-          height: height,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: contentWidth,
-              height: height,
-              child: CustomPaint(
-                painter: RoadmapGridPainter(
-                  grid: grid,
-                  cellWidth: cellWidth,
-                  cellHeight: cellHeight,
-                  visualRows: _visualRows,
-                ),
-                isComplex: true,
-                willChange: false,
+        final columnLimit = visibleColumns;
+        if (columnLimit == null) {
+          final contentWidth = math.max(
+            constraints.maxWidth,
+            cellWidth * grid.columnCount,
+          );
+          return SizedBox(
+            height: defaultHeight,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: contentWidth,
+                height: defaultHeight,
+                child: _gridPaint(cellWidth),
               ),
             ),
+          );
+        }
+
+        final viewportWidth = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : cellWidth * columnLimit;
+        final displayCellWidth = viewportWidth / columnLimit;
+        final displayCellHeight = squareCells ? displayCellWidth : cellHeight;
+        final displayHeight = displayCellHeight * _visualRows;
+        final displayGrid = _slidingWindowGrid(grid, columnLimit);
+        return SizedBox(
+          width: viewportWidth,
+          height: displayHeight,
+          child: _gridPaint(
+            displayCellWidth,
+            displayGrid: displayGrid,
+            visualRows: _visualRows,
+            height: displayHeight,
+            paintCellHeight: displayCellHeight,
           ),
         );
       },
+    );
+  }
+
+  RoadmapGrid _slidingWindowGrid(RoadmapGrid source, int columnLimit) {
+    var dataColumnCount = 0;
+    for (final position in source.markers.keys) {
+      dataColumnCount = math.max(dataColumnCount, position.col + 1);
+    }
+
+    final firstVisibleColumn = math.max(0, dataColumnCount - columnLimit);
+    final visibleMarkers = <RoadmapPosition, RoadmapMarker>{};
+    for (final entry in source.markers.entries) {
+      if (entry.key.col < firstVisibleColumn ||
+          entry.key.col >= firstVisibleColumn + columnLimit) {
+        continue;
+      }
+      visibleMarkers[RoadmapPosition(
+            col: entry.key.col - firstVisibleColumn,
+            row: entry.key.row,
+            subCol: entry.key.subCol,
+          )] =
+          entry.value;
+    }
+
+    return RoadmapGrid(
+      type: source.type,
+      rowCount: source.rowCount,
+      columnCount: columnLimit,
+      markers: visibleMarkers,
+    );
+  }
+
+  Widget _gridPaint(
+    double width, {
+    RoadmapGrid? displayGrid,
+    int? visualRows,
+    double? height,
+    double? paintCellHeight,
+  }) {
+    final gridPainter = RoadmapGridPainter(
+      grid: displayGrid ?? grid,
+      cellWidth: width,
+      cellHeight: paintCellHeight ?? cellHeight,
+      visualRows: visualRows ?? _visualRows,
+    );
+    if (displayGrid == null) {
+      return CustomPaint(
+        painter: gridPainter,
+        isComplex: true,
+        willChange: false,
+      );
+    }
+    return CustomPaint(
+      size: Size(width * displayGrid.columnCount, height!),
+      painter: gridPainter,
+      isComplex: true,
+      willChange: false,
     );
   }
 }

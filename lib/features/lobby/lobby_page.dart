@@ -403,6 +403,14 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
     }
   }
 
+  Future<void> _openBaccaratDesk(int deskId) async {
+    await context.pushNamed<void>(
+      'baccaratDetail',
+      pathParameters: {'deskId': '$deskId'},
+    );
+    if (mounted) await _loadMemberProfile();
+  }
+
   Future<void> _loadMemberProfile() async {
     final storage = ref.read(secureStorageProvider);
     final token = await storage.getAuthToken();
@@ -534,20 +542,26 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
                     )
                   : ListView.separated(
                       physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                      padding: const EdgeInsets.only(bottom: 12),
                       itemCount: desks.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      separatorBuilder: (_, _) => const SizedBox.shrink(),
                       itemBuilder: (context, index) {
                         final desk = desks[index];
                         return LobbyGameTableSection(
                           desk: _dashboardData(desk),
                           isTrial: _trial,
-                          onEnter: () => showGoldDialog(
-                            context: context,
-                            kind: GoldDialogKind.info,
-                            title: desk.name,
-                            message: '投注将在下一阶段接入',
-                          ),
+                          onEnter: () {
+                            if (desk.baccarat) {
+                              unawaited(_openBaccaratDesk(desk.id));
+                            } else {
+                              showGoldDialog(
+                                context: context,
+                                kind: GoldDialogKind.info,
+                                title: desk.name,
+                                message: '该游戏暂不支持移动端牌桌',
+                              );
+                            }
+                          },
                         );
                       },
                     ),

@@ -189,7 +189,10 @@ class ApiPreloadLoader implements PreloadLoader {
       }),
       run('cameras', () async {
         final json = await _api.getJson(AppConstants.publicCamerasPath);
-        return extractNamedList(json, 'cameras');
+        return extractNamedList(
+          json,
+          'cameras',
+        ).map(projectCameraRecord).toList(growable: false);
       }),
       run('settings', () async {
         final json = await _api.getJson(AppConstants.publicSettingsPath);
@@ -205,6 +208,24 @@ class ApiPreloadLoader implements PreloadLoader {
       failures: failures,
     );
   }
+}
+
+Map<String, dynamic> projectCameraRecord(Map<String, dynamic> camera) {
+  const allowedFields = {'id', 'desk_id', 'camera_no', 'position', 'url'};
+  return {
+    for (final entry in camera.entries)
+      if (allowedFields.contains(entry.key))
+        entry.key: entry.key == 'url'
+            ? _stripCameraUrlCredentials(entry.value)
+            : entry.value,
+  };
+}
+
+Object? _stripCameraUrlCredentials(Object? value) {
+  final rawUrl = value?.toString() ?? '';
+  final uri = Uri.tryParse(rawUrl);
+  if (uri == null || uri.userInfo.isEmpty) return value;
+  return uri.replace(userInfo: '').toString();
 }
 
 List<Map<String, dynamic>> extractNamedList(

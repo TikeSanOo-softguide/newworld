@@ -52,6 +52,46 @@ class LobbySocketStatus {
   final bool authenticationFailed;
 }
 
+sealed class LobbyDeskUpdate {
+  const LobbyDeskUpdate({required this.deskId});
+
+  final int deskId;
+}
+
+class LobbyDeskTimerUpdate extends LobbyDeskUpdate {
+  const LobbyDeskTimerUpdate({
+    required super.deskId,
+    required this.remainingSeconds,
+  });
+
+  final int remainingSeconds;
+}
+
+class LobbyDeskStatusUpdate extends LobbyDeskUpdate {
+  const LobbyDeskStatusUpdate({required super.deskId, required this.status});
+
+  final String status;
+}
+
+class LobbyDeskPoolTotalsUpdate extends LobbyDeskUpdate {
+  const LobbyDeskPoolTotalsUpdate({
+    required super.deskId,
+    required this.roundId,
+    required this.poolType,
+    required this.totals,
+    required this.displayTotals,
+  });
+
+  final int roundId;
+  final String poolType;
+  final Map<String, num> totals;
+  final Map<String, num> displayTotals;
+}
+
+class LobbyDeskSessionFinished extends LobbyDeskUpdate {
+  const LobbyDeskSessionFinished({required super.deskId});
+}
+
 class LobbySocketService {
   LobbySocketService({
     required this.apiBaseUrl,
@@ -63,6 +103,7 @@ class LobbySocketService {
   final _results = StreamController<LobbyRoundResult>.broadcast(sync: true);
   final _statuses = StreamController<LobbySocketStatus>.broadcast(sync: true);
   final _protocolErrors = StreamController<String>.broadcast(sync: true);
+  final _deskUpdates = StreamController<LobbyDeskUpdate>.broadcast(sync: true);
 
   LobbySocketConnection? _socket;
   String? _token;
@@ -77,6 +118,8 @@ class LobbySocketService {
   Stream<LobbyRoundResult> get results => _results.stream;
   Stream<LobbySocketStatus> get statuses => _statuses.stream;
   Stream<String> get protocolErrors => _protocolErrors.stream;
+  Stream<LobbyDeskUpdate> get deskUpdates => _deskUpdates.stream;
+  bool get connected => _socket?.connected ?? false;
 
   void connect({required String token, required Iterable<int> deskIds}) {
     if (token.trim().isEmpty) {
@@ -137,6 +180,7 @@ class LobbySocketService {
     unawaited(_results.close());
     unawaited(_statuses.close());
     unawaited(_protocolErrors.close());
+    unawaited(_deskUpdates.close());
   }
 
   void _attachListeners(LobbySocketConnection socket) {
@@ -183,19 +227,59 @@ class LobbySocketService {
       );
     };
     _onAny = (event, payload) {
-      final match = RegExp(r'^desk:(\d+):updateResult$').firstMatch(event);
+      final match = RegExp(
+        r'^desk:(\d+):(updateResult|updateTimer|updateStatus|roundPoolTotals|finish-session)$',
+      ).firstMatch(event);
       if (match == null) return;
       final deskId = int.parse(match.group(1)!);
       if (!_deskIds.contains(deskId)) return;
-      try {
-        final result = LobbyRoundResult.fromSocket(deskId, payload);
-        _debugLog('result received deskId=$deskId roundId=${result.roundId}');
-        _results.add(result);
-      } on FormatException catch (error) {
-        _debugLog(
-          'invalid result payload deskId=$deskId error=${error.message}',
-        );
-        _protocolErrors.add(error.message);
+      switch (match.group(2)) {
+        case 'updateResult':
+          try {
+            final result = LobbyRoundResult.fromSocket(deskId, payload);
+            _debugLog(
+              'result received deskId=$deskId roundId=${result.roundId}',
+            );
+            _results.add(result);
+          } on FormatException catch (error) {
+            _debugLog(
+              'invalid result payload deskId=$deskId error=${error.message}',
+            );
+            _protocolErrors.add(error.message);
+          }
+        case 'updateTimer':
+          final seconds = _asInt(payload);
+          if (seconds == null) {
+            _invalidDeskUpdate(deskId, 'updateTimer');
+            return;
+          }
+          _deskUpdates.add(
+            LobbyDeskTimerUpdate(deskId: deskId, remainingSeconds: seconds),
+          );
+        case 'updateStatus':
+          final status = payload is String
+              ? payload
+              : payload is Map
+              ? payload['status']?.toString()
+              : null;
+          if (status == null || status.isEmpty) {
+            _invalidDeskUpdate(deskId, 'updateStatus');
+            return;
+          }
+          _deskUpdates.add(
+            LobbyDeskStatusUpdate(deskId: deskId, status: status),
+          );
+        case 'roundPoolTotals':
+          try {
+            _deskUpdates.add(_poolTotalsUpdate(deskId, payload));
+          } on FormatException catch (error) {
+            _debugLog(
+              'invalid pool totals deskId=$deskId error=${error.message}',
+            );
+            _protocolErrors.add(error.message);
+          }
+        case 'finish-session':
+          _deskUpdates.add(LobbyDeskSessionFinished(deskId: deskId));
       }
     };
 
@@ -221,6 +305,12 @@ class LobbySocketService {
       _managerListeners[event] = handler;
       socket.onManagerEvent(event, handler);
     }
+  }
+
+  void _invalidDeskUpdate(int deskId, String event) {
+    final message = 'Invalid $event payload for desk $deskId';
+    _debugLog(message);
+    _protocolErrors.add(message);
   }
 
   void _detachListeners(LobbySocketConnection socket) {
@@ -332,6 +422,51 @@ bool _isAuthenticationError(String message) {
       normalized.contains('token invalid') ||
       normalized.contains('tokenexpired') ||
       normalized.contains('user not found');
+}
+
+LobbyDeskPoolTotalsUpdate _poolTotalsUpdate(int deskId, Object? payload) {
+  if (payload is! Map) {
+    throw const FormatException('Pool totals payload must be an object');
+  }
+  final roundId = _asInt(payload['round_id']);
+  final poolType = payload['pool_type']?.toString();
+  final totals = _numericMap(payload['totals']);
+  final displayTotals = _numericMap(payload['display_totals']);
+  if (roundId == null ||
+      poolType == null ||
+      totals == null ||
+      displayTotals == null) {
+    throw const FormatException('Pool totals payload is missing required data');
+  }
+  return LobbyDeskPoolTotalsUpdate(
+    deskId: deskId,
+    roundId: roundId,
+    poolType: poolType,
+    totals: totals,
+    displayTotals: displayTotals,
+  );
+}
+
+Map<String, num>? _numericMap(Object? value) {
+  if (value is! Map) return null;
+  final output = <String, num>{};
+  for (final entry in value.entries) {
+    final number = entry.value;
+    if (number is num) {
+      output[entry.key.toString()] = number;
+    } else {
+      final parsed = num.tryParse(number?.toString() ?? '');
+      if (parsed == null) return null;
+      output[entry.key.toString()] = parsed;
+    }
+  }
+  return output;
+}
+
+int? _asInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse(value?.toString() ?? '');
 }
 
 void _debugLog(String message) {

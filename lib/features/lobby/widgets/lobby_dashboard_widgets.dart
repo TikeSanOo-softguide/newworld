@@ -7,6 +7,19 @@ import '../models/lobby_dashboard_data.dart';
 import '../roadmap/roadmap_models.dart';
 import '../roadmap/roadmap_painter.dart';
 
+const beadPlateRows = 6;
+const beadPlateColumns = 6;
+const bigRoadRows = 6;
+const bigRoadColumns = 27;
+const bigEyeBoyRows = 3;
+const bigEyeBoyColumns = 14;
+const cockroachPigRows = 3;
+const cockroachPigColumns = 13;
+const smallRoadRows = 3;
+const smallRoadColumns = 14;
+const secondBigRoadRows = 3;
+const secondBigRoadColumns = 13;
+
 class LobbyDashboardHeader extends StatelessWidget {
   const LobbyDashboardHeader({
     super.key,
@@ -23,7 +36,7 @@ class LobbyDashboardHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFF080604),
-      padding: const EdgeInsets.fromLTRB(10, 7, 5, 7),
+      padding: const EdgeInsets.fromLTRB(10, 3.5, 5, 3.5),
       child: Row(
         children: [
           SizedBox(
@@ -121,7 +134,7 @@ class _LobbyAnnouncementBannerState extends State<LobbyAnnouncementBanner>
         : '暂无公告';
     return Container(
       height: 44,
-      margin: const EdgeInsets.fromLTRB(3, 5, 3, 5),
+      margin: const EdgeInsets.fromLTRB(3, 3.5, 3, 5),
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: const Color(0xE91A1711),
@@ -226,10 +239,10 @@ class LobbyGameCategoryTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 46,
+      height: 36,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 3),
         children: [
           _CategoryTab(
             label: '全部',
@@ -264,11 +277,11 @@ class _CategoryTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 1),
       child: InkWell(
         onTap: onTap,
         child: Container(
-          constraints: const BoxConstraints(minWidth: 96),
+          constraints: const BoxConstraints(minWidth: 100),
           padding: const EdgeInsets.symmetric(horizontal: 18),
           alignment: Alignment.center,
           decoration: BoxDecoration(
@@ -313,25 +326,26 @@ class LobbyGameTableSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final innerWidth = math.max(0, constraints.maxWidth - 10);
-        final markerWidth = (innerWidth * 0.29).clamp(76.0, 112.0);
+        final rowWidth = math.max(0, constraints.maxWidth - 3);
+        final markerWidth = rowWidth * 0.31;
         return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+          margin: const EdgeInsets.only(bottom: 2),
           decoration: const BoxDecoration(color: Color(0xFF050505)),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
-                height: 32,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
+                height: 34,
+                padding: const EdgeInsets.symmetric(horizontal: 5),
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Color(0xFF241D10), Color(0xFF090807)],
+                    colors: [Color(0xFF191710), Color(0xFF080807)],
                   ),
                 ),
                 child: Row(
                   children: [
                     Expanded(
+                      flex: 2,
                       child: Text(
                         '${desk.gameName}${desk.name}',
                         maxLines: 1,
@@ -343,6 +357,11 @@ class LobbyGameTableSection extends StatelessWidget {
                         ),
                       ),
                     ),
+                    for (final statistic in desk.statistics)
+                      Expanded(
+                        flex: 1,
+                        child: _StatisticText(statistic: statistic),
+                      ),
                     _DeskStatusLabel(
                       label: desk.statusLabel,
                       status: desk.status,
@@ -350,116 +369,133 @@ class LobbyGameTableSection extends StatelessWidget {
                   ],
                 ),
               ),
-              SizedBox(
-                height: 28,
-                child: Row(
+              Padding(
+                padding: const EdgeInsets.only(right: 3),
+                child: Stack(
                   children: [
-                    for (
-                      var index = 0;
-                      index < desk.statistics.length;
-                      index++
-                    ) ...[
-                      if (index > 0)
-                        Container(
-                          width: 1,
-                          height: 17,
-                          color: const Color(0x55474747),
-                        ),
-                      Expanded(
-                        child: _StatisticText(
-                          statistic: desk.statistics[index],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              SizedBox(
-                height: 168,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SizedBox(
-                      width: markerWidth,
-                      child: RoadmapGridView(
-                        grid: desk.markerRoad,
-                        cellWidth: 28,
-                        cellHeight: 28,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Expanded(
-                      child: Stack(
-                        children: [
-                          Column(
-                            children: [
-                              RoadmapGridView(
-                                grid: desk.bigRoad,
-                                cellWidth: 14,
-                                cellHeight: 14,
-                              ),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: RoadmapGridView(
-                                      grid: desk.bigEyeRoad,
-                                      cellWidth: 14,
-                                      cellHeight: 14,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: RoadmapGridView(
-                                      grid: desk.cockroachRoad,
-                                      cellWidth: 14,
-                                      cellHeight: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: RoadmapGridView(
-                                      grid: desk.smallRoad,
-                                      cellWidth: 14,
-                                      cellHeight: 14,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: RoadmapGridView(
-                                      grid: desk.secondBigRoad,
-                                      cellWidth: 14,
-                                      cellHeight: 14,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: markerWidth,
+                          child: RoadmapGridView(
+                            grid: desk.markerRoad,
+                            cellWidth: 14,
+                            cellHeight: 14,
+                            visibleRows: beadPlateRows,
+                            visibleColumns: beadPlateColumns,
+                            squareCells: true,
                           ),
-                          if (desk.resultCount == 0)
-                            const Positioned.fill(
-                              child: IgnorePointer(
-                                child: Center(
-                                  child: Text(
-                                    '暂无路单',
-                                    style: TextStyle(
-                                      color: Color(0xFF686868),
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                    ),
+                        ),
+                        const SizedBox(width: 2),
+                        Expanded(
+                          child: LayoutBuilder(
+                            builder: (context, roadConstraints) {
+                              final wideDerivedRoadWidth =
+                                  roadConstraints.maxWidth *
+                                  bigEyeBoyColumns /
+                                  bigRoadColumns;
+                              final narrowDerivedRoadWidth =
+                                  roadConstraints.maxWidth -
+                                  wideDerivedRoadWidth;
+                              final derivedCellHeight =
+                                  roadConstraints.maxWidth / bigRoadColumns;
+                              return Stack(
+                                children: [
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      RoadmapGridView(
+                                        grid: desk.bigRoad,
+                                        cellWidth: 12,
+                                        cellHeight: 12,
+                                        visibleRows: bigRoadRows,
+                                        visibleColumns: bigRoadColumns,
+                                        squareCells: true,
+                                      ),
+                                      Row(
+                                        children: [
+                                          SizedBox(
+                                            width: wideDerivedRoadWidth,
+                                            child: RoadmapGridView(
+                                              grid: desk.bigEyeRoad,
+                                              cellWidth: 12,
+                                              cellHeight: 12,
+                                              visibleRows: bigEyeBoyRows,
+                                              visibleColumns: bigEyeBoyColumns,
+                                              squareCells: true,
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: narrowDerivedRoadWidth,
+                                            child: RoadmapGridView(
+                                              grid: desk.cockroachRoad,
+                                              cellWidth: 12,
+                                              cellHeight: derivedCellHeight,
+                                              visibleRows: cockroachPigRows,
+                                              visibleColumns:
+                                                  cockroachPigColumns,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      Row(
+                                        children: [
+                                          SizedBox(
+                                            width: wideDerivedRoadWidth,
+                                            child: RoadmapGridView(
+                                              grid: desk.smallRoad,
+                                              cellWidth: 12,
+                                              cellHeight: 12,
+                                              visibleRows: smallRoadRows,
+                                              visibleColumns: smallRoadColumns,
+                                              squareCells: true,
+                                            ),
+                                          ),
+                                          SizedBox(
+                                            width: narrowDerivedRoadWidth,
+                                            child: RoadmapGridView(
+                                              grid: desk.secondBigRoad,
+                                              cellWidth: 12,
+                                              cellHeight: derivedCellHeight,
+                                              visibleRows: secondBigRoadRows,
+                                              visibleColumns:
+                                                  secondBigRoadColumns,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
                                   ),
-                                ),
-                              ),
-                            ),
-                          if (isTrial)
-                            const Positioned.fill(
-                              child: IgnorePointer(
-                                child: Center(child: _TrialWatermark()),
-                              ),
-                            ),
-                        ],
-                      ),
+                                  if (desk.resultCount == 0)
+                                    const Positioned.fill(
+                                      child: IgnorePointer(
+                                        child: Center(
+                                          child: Text(
+                                            '暂无路单',
+                                            style: TextStyle(
+                                              color: Color(0xFF686868),
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ),
+                    if (isTrial)
+                      const Positioned.fill(
+                        child: IgnorePointer(
+                          child: Center(child: _TrialWatermark()),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -579,7 +615,7 @@ class _StatisticText extends StatelessWidget {
             style: const TextStyle(fontSize: 13),
             children: [
               TextSpan(
-                text: '${statistic.label} ',
+                text: '${statistic.label}:',
                 style: TextStyle(color: _roadColor(statistic.color)),
               ),
               TextSpan(
@@ -639,13 +675,12 @@ class _TrialWatermark extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xEFFFFFFF),
-        border: Border.all(color: const Color(0xFFEF3038), width: 1.6),
+        border: Border.all(color: const Color(0x99EF3038), width: 1.6),
       ),
       child: const Text(
         '试玩中',
         style: TextStyle(
-          color: Color(0xFFEF3038),
+          color: Color(0xB3EF3038),
           fontSize: 16,
           fontWeight: FontWeight.w700,
           height: 1.1,

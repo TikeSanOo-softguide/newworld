@@ -20,6 +20,7 @@ dependencies:
   web_socket_channel: ^3.0.3
   url_launcher: ^6.3.3
   socket_io_client: ^3.1.6
+  video_player: ^2.14.1
 
 dev_dependencies:
   flutter_test:
@@ -40,3 +41,4 @@ flutter:
     - assets/images/cctv_baccarat_table.png
     - assets/images/baccarat_table_ref.jpg
     - assets/images/baccarat_home_ui.jpg
+    - assets/images/coins/

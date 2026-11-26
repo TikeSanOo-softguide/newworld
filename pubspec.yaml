@@ -21,6 +21,9 @@ dependencies:
   url_launcher: ^6.3.3
   socket_io_client: ^3.1.6
   video_player: ^2.14.1
+  webview_flutter: ^4.13.0
+  webview_flutter_android: ^4.10.0
+  audioplayers: ^6.5.0
 
 dev_dependencies:
   flutter_test:
@@ -42,3 +45,6 @@ flutter:
     - assets/images/baccarat_table_ref.jpg
     - assets/images/baccarat_home_ui.jpg
     - assets/images/coins/
+    - assets/images/cards/
+    - assets/voices/
+    - assets/whep_player.html

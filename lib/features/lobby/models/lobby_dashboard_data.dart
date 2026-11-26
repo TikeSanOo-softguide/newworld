@@ -35,6 +35,9 @@ class LobbyDeskDashboardData {
     required this.minBet,
     required this.maxBet,
     required this.resultCount,
+    required this.shuffling,
+    this.remainingSeconds = 0,
+    this.bettingSeconds = 0,
     required this.statistics,
     required this.markerRoad,
     required this.bigRoad,
@@ -53,6 +56,9 @@ class LobbyDeskDashboardData {
   final int minBet;
   final int maxBet;
   final int resultCount;
+  final bool shuffling;
+  final int remainingSeconds;
+  final int bettingSeconds;
   final List<LobbyOutcomeStat> statistics;
   final RoadmapGrid markerRoad;
   final RoadmapGrid bigRoad;

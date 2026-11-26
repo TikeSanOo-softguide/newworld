@@ -4,7 +4,10 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
-import '../constants/app_constants.dart';
+import '../config/app_config.dart';
+import 'api_exception.dart';
+
+export 'api_exception.dart';
 
 final httpClientProvider = Provider<http.Client>((ref) {
   final client = http.Client();
@@ -15,7 +18,7 @@ final httpClientProvider = Provider<http.Client>((ref) {
 final apiClientProvider = Provider<ApiClient>((ref) {
   return ApiClient(
     client: ref.watch(httpClientProvider),
-    baseUrl: AppConstants.apiBaseUrl,
+    baseUrl: AppConfig.apiBaseUrl,
   );
 });
 
@@ -46,8 +49,7 @@ class ApiClient {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
       if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
-      if (csrfToken != null && csrfToken.isNotEmpty)
-        'X-CSRF-Token': csrfToken,
+      if (csrfToken != null && csrfToken.isNotEmpty) 'X-CSRF-Token': csrfToken,
     };
   }
 
@@ -57,10 +59,7 @@ class ApiClient {
     String? token,
   }) {
     return _send(
-      () => client.get(
-        _uri(path, query),
-        headers: _headers(token: token),
-      ),
+      () => client.get(_uri(path, query), headers: _headers(token: token)),
     );
   }
 
@@ -130,7 +129,8 @@ class ApiClient {
     }
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final rawMessage = decoded['message']?.toString() ??
+      final rawMessage =
+          decoded['message']?.toString() ??
           decoded['error']?.toString() ??
           '请求失败（${response.statusCode}）';
       final locked = decoded['lockedUntil'];
@@ -145,29 +145,4 @@ class ApiClient {
 
     return decoded;
   }
-}
-
-/// Uses the Chinese half of a `中文|||English` API message.
-String chineseMessage(String message) {
-  final parts = message.split('|||');
-  return parts.first.trim();
-}
-
-class ApiException implements Exception {
-  ApiException({
-    required this.statusCode,
-    required this.message,
-    this.code,
-    this.supersededIp,
-    this.lockedUntil,
-  });
-
-  final int statusCode;
-  final String message;
-  final String? code;
-  final String? supersededIp;
-  final int? lockedUntil;
-
-  @override
-  String toString() => message;
 }

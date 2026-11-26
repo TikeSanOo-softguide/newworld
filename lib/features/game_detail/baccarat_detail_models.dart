@@ -6,12 +6,16 @@ class BaccaratDeskDetail {
     required this.gameId,
     required this.name,
     required this.gameName,
+    this.gameType = 'BACCARAT',
     required this.minBet,
     required this.maxBet,
     required this.sessionId,
+    this.sessionNo,
     required this.lastRoundId,
     required this.lastRoundNo,
     required this.singleCamera,
+    this.deskType = '',
+    this.bettingSeconds = 0,
     required this.rateLimitEnabled,
     required this.deskResultRateLimits,
     required this.results,
@@ -21,12 +25,20 @@ class BaccaratDeskDetail {
   final int gameId;
   final String name;
   final String gameName;
+  final String gameType;
   final int minBet;
   final int maxBet;
   final int? sessionId;
+  final int? sessionNo;
   final int? lastRoundId;
   final int? lastRoundNo;
   final bool singleCamera;
+
+  /// Desk `desk_type`. `scanner` or `manual`. Empty when the payload omits it.
+  final String deskType;
+
+  /// Desk `online_betting_count_down`. Zero when the payload omits it.
+  final int bettingSeconds;
   final bool rateLimitEnabled;
   final Map<int, BaccaratBetLimit> deskResultRateLimits;
   final List<LobbyRoundResult> results;
@@ -41,9 +53,9 @@ class BaccaratDeskDetail {
     final game = json['game'] is Map
         ? Map<String, dynamic>.from(json['game'] as Map)
         : const <String, dynamic>{};
-    final type = game['type']?.toString() ?? '';
-    if (type.toUpperCase() != 'BACCARAT') {
-      throw const FormatException('所选桌台不是百家乐桌台');
+    final type = (game['type']?.toString() ?? 'BACCARAT').toUpperCase();
+    if (type != 'BACCARAT' && type != 'LONGHU') {
+      throw const FormatException('所选桌台不是百家乐或龙虎桌台');
     }
 
     final rawResults = json['results'];
@@ -82,13 +94,17 @@ class BaccaratDeskDetail {
       id: id,
       gameId: gameId,
       name: json['name']?.toString() ?? '台桌',
-      gameName: game['name']?.toString() ?? '百家乐',
+      gameName: game['name']?.toString() ?? (type == 'LONGHU' ? '龙虎' : '百家乐'),
+      gameType: type,
       minBet: _asInt(json['min_bet']) ?? 0,
       maxBet: _asInt(json['max_bet']) ?? 0,
       sessionId: _asInt(session['id']),
+      sessionNo: _asInt(session['session_no']),
       lastRoundId: _asInt(lastRound['id']),
       lastRoundNo: _asInt(lastRound['round_no']),
       singleCamera: _asBool(json['single_camera_flg']),
+      deskType: json['desk_type']?.toString() ?? '',
+      bettingSeconds: _asInt(json['online_betting_count_down']) ?? 0,
       rateLimitEnabled: _asBool(json['rate_limit_flg']),
       deskResultRateLimits: Map.unmodifiable(deskResultRateLimits),
       results: List.unmodifiable(results),
@@ -242,15 +258,28 @@ class BaccaratConfirmedBets {
   const BaccaratConfirmedBets({
     required this.byResultKey,
     required this.totalAmount,
+    this.serverMessage,
   });
 
   final Map<String, BaccaratConfirmedBet> byResultKey;
   final num totalAmount;
 
+  /// Existing `message` from `GET /user/confirm_bets/:roundId`.
+  ///
+  /// `Round finished` is the settled empty view. `Confirmed bets fetched
+  /// successfully` is the live stake list and can still be the pre-settlement
+  /// snapshot. No field was added to the API.
+  final String? serverMessage;
+
   factory BaccaratConfirmedBets.fromApi(Map<String, dynamic> response) {
+    final message = response['message']?.toString();
     final data = response['data'];
     if (data is! Map) {
-      return const BaccaratConfirmedBets(byResultKey: {}, totalAmount: 0);
+      return BaccaratConfirmedBets(
+        byResultKey: const {},
+        totalAmount: 0,
+        serverMessage: message,
+      );
     }
     final rawBets = data['confirmedBets'];
     final bets = <String, BaccaratConfirmedBet>{};
@@ -262,8 +291,28 @@ class BaccaratConfirmedBets {
     return BaccaratConfirmedBets(
       byResultKey: Map.unmodifiable(bets),
       totalAmount: _asNum(data['totalBetAmount']) ?? 0,
+      serverMessage: message,
     );
   }
+}
+
+/// Whether `GET /user/confirm_bets/:roundId` is the settled view.
+///
+/// The server returns `Round finished` and an empty map once `GameRound`
+/// status is finished, whether or not this member had bets. `No bet found`
+/// is an unfinished round with no bet row. `Confirmed bets fetched
+/// successfully` is the live stake list. Any other shape, including an empty
+/// list with no message, is not treated as settled.
+bool confirmedBetsReflectSettlement(BaccaratConfirmedBets bets) {
+  return _betMessageHas(bets.serverMessage ?? '', const [
+    'Round finished',
+    '牌局已结束',
+  ]);
+}
+
+bool _betMessageHas(String message, List<String> phrases) {
+  final parts = message.split('|||').map((part) => part.trim());
+  return parts.any(phrases.contains);
 }
 
 class BaccaratCameraFeed {

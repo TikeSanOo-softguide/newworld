@@ -4,21 +4,26 @@ import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../models/lobby_dashboard_data.dart';
+import '../roadmap/roadmap_board.dart';
+import '../roadmap/roadmap_metrics.dart';
 import '../roadmap/roadmap_models.dart';
-import '../roadmap/roadmap_painter.dart';
 
-const beadPlateRows = 6;
-const beadPlateColumns = 6;
-const bigRoadRows = 6;
-const bigRoadColumns = 27;
-const bigEyeBoyRows = 3;
-const bigEyeBoyColumns = 14;
-const cockroachPigRows = 3;
-const cockroachPigColumns = 13;
-const smallRoadRows = 3;
-const smallRoadColumns = 14;
-const secondBigRoadRows = 3;
-const secondBigRoadColumns = 13;
+export '../roadmap/roadmap_metrics.dart';
+
+/// Dim wash used only while 洗牌中... is showing. Other desks stay sharp.
+const listShuffleBoardColor = Color(0xFF808483);
+const listShuffleLineColor = Color(0xFF565A59);
+
+const _lobbyGold = Color(0xFFF0CC79);
+const _lobbyReferenceWidth = 640.0;
+
+/// Sizes below match the 640-wide lobby reference. Other widths scale them so
+/// the header, tabs, and announcement keep that proportion to the roads.
+double lobbyChromeScale(BuildContext context) {
+  final width = MediaQuery.sizeOf(context).width;
+  if (width <= 0) return 1;
+  return (width / _lobbyReferenceWidth).clamp(0.6, 1.7);
+}
 
 class LobbyDashboardHeader extends StatelessWidget {
   const LobbyDashboardHeader({
@@ -34,13 +39,29 @@ class LobbyDashboardHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scale = lobbyChromeScale(context);
+    final userStyle = TextStyle(
+      color: const Color(0xFFF4F1EA),
+      fontSize: 15 * scale,
+      height: 1.15,
+    );
     return Container(
-      color: const Color(0xFF080604),
-      padding: const EdgeInsets.fromLTRB(10, 3.5, 5, 3.5),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFF050301), Color(0xFF100E0A), Color(0xFF2A2214)],
+        ),
+      ),
+      padding: EdgeInsets.fromLTRB(
+        12 * scale,
+        16 * scale,
+        8 * scale,
+        14 * scale,
+      ),
       child: Row(
         children: [
-          SizedBox(
-            width: 76,
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
@@ -49,49 +70,78 @@ class LobbyDashboardHeader extends StatelessWidget {
                   '用户：${account.isEmpty ? '会员' : account}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  style: userStyle,
                 ),
-                const SizedBox(height: 3),
+                SizedBox(height: 3 * scale),
                 Text(
                   '总分：$balance',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  style: userStyle,
                 ),
               ],
+            ),
+          ),
+          Image.asset(AppAssets.logo, width: 46 * scale, height: 46 * scale),
+          SizedBox(width: 6 * scale),
+          Text(
+            '新世界在线',
+            maxLines: 1,
+            style: TextStyle(
+              color: _lobbyGold,
+              fontSize: 22 * scale,
+              fontWeight: FontWeight.w700,
+              height: 1,
             ),
           ),
           Expanded(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Image.asset(AppAssets.logo, width: 38, height: 38),
-                const SizedBox(width: 5),
-                const Flexible(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      '新世界在线',
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: Color(0xFFF0CC79),
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                onPressed: onMenu,
+                tooltip: '菜单',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.all(6 * scale),
+                constraints: BoxConstraints(
+                  minWidth: 36 * scale,
+                  minHeight: 36 * scale,
                 ),
-              ],
+                icon: _MenuMark(size: 32 * scale, color: _lobbyGold),
+              ),
             ),
           ),
-          IconButton(
-            onPressed: onMenu,
-            tooltip: '菜单',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.menu, color: Color(0xFFF0CC79), size: 30),
-          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MenuMark extends StatelessWidget {
+  const _MenuMark({required this.size, required this.color});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final barHeight = (size * 0.14).clamp(2.0, 6.0);
+    final gap = size * 0.18;
+    return SizedBox(
+      width: size * 1.2,
+      height: size,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          for (var index = 0; index < 3; index++) ...[
+            if (index > 0) SizedBox(height: gap),
+            Container(
+              height: barHeight,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(barHeight),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -112,13 +162,35 @@ class _LobbyAnnouncementBannerState extends State<LobbyAnnouncementBanner>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
 
+  /// Member site list marquee: `max(10, length * 0.2 + 5)` seconds.
+  static Duration _durationFor(String message) {
+    final seconds = math.max(10.0, message.length * 0.2 + 5);
+    return Duration(milliseconds: (seconds * 1000).round());
+  }
+
+  String get _message =>
+      widget.text?.trim().isNotEmpty == true ? widget.text!.trim() : '暂无公告';
+
+  void _syncDuration() {
+    final duration = _durationFor(_message);
+    if (_controller.duration == duration) return;
+    _controller.duration = duration;
+    _controller.repeat();
+  }
+
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 18),
+      duration: _durationFor(_message),
     )..repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant LobbyAnnouncementBanner oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncDuration();
   }
 
   @override
@@ -129,33 +201,33 @@ class _LobbyAnnouncementBannerState extends State<LobbyAnnouncementBanner>
 
   @override
   Widget build(BuildContext context) {
-    final message = widget.text?.trim().isNotEmpty == true
-        ? widget.text!.trim()
-        : '暂无公告';
+    final message = _message;
+    final scale = lobbyChromeScale(context);
     return Container(
-      height: 44,
-      margin: const EdgeInsets.fromLTRB(3, 3.5, 3, 5),
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      height: 64 * scale,
+      margin: EdgeInsets.fromLTRB(4, 4 * scale, 4, 6 * scale),
+      padding: EdgeInsets.symmetric(horizontal: 10 * scale),
       decoration: BoxDecoration(
-        color: const Color(0xE91A1711),
-        border: Border.all(color: const Color(0xAA9A7A37), width: 1),
+        color: const Color(0xFF1A1406),
+        border: Border.all(color: const Color(0xFF9A7A37), width: 1.5),
       ),
       child: Row(
         children: [
-          const Icon(
+          Icon(
             Icons.campaign_outlined,
-            color: Color(0xFFE2C06B),
-            size: 23,
+            color: const Color(0xFFC9A45A),
+            size: 26 * scale,
           ),
-          const SizedBox(width: 9),
+          SizedBox(width: 8 * scale),
           Expanded(
             child: ClipRect(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final style = const TextStyle(
+                  final style = TextStyle(
                     color: Colors.white,
-                    fontSize: 14,
+                    fontSize: 17 * scale,
                     fontWeight: FontWeight.w700,
+                    height: 1,
                   );
                   final textScaler = MediaQuery.textScalerOf(context);
                   final textPainter = TextPainter(
@@ -164,55 +236,34 @@ class _LobbyAnnouncementBannerState extends State<LobbyAnnouncementBanner>
                     textDirection: TextDirection.ltr,
                     textScaler: textScaler,
                   )..layout();
-                  if (textPainter.width <= constraints.maxWidth) {
-                    return Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(message, maxLines: 1, style: style),
-                    );
-                  }
-                  const gap = 48.0;
-                  final travel = textPainter.width + gap;
+                  final viewport = constraints.maxWidth;
+                  final textWidth = textPainter.width;
                   return AnimatedBuilder(
                     animation: _controller,
                     builder: (context, child) {
-                      final offset = -_controller.value * travel;
+                      final start = viewport;
+                      final end = -textWidth;
                       return Transform.translate(
-                        offset: Offset(offset, 0),
-                        child: OverflowBox(
-                          alignment: Alignment.centerLeft,
-                          minWidth: travel + textPainter.width,
-                          maxWidth: travel + textPainter.width,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              SizedBox(
-                                width: textPainter.width,
-                                child: Text(
-                                  message,
-                                  maxLines: 1,
-                                  softWrap: false,
-                                  overflow: TextOverflow.clip,
-                                  textScaler: textScaler,
-                                  style: style,
-                                ),
-                              ),
-                              const SizedBox(width: gap),
-                              SizedBox(
-                                width: textPainter.width,
-                                child: Text(
-                                  message,
-                                  maxLines: 1,
-                                  softWrap: false,
-                                  overflow: TextOverflow.clip,
-                                  textScaler: textScaler,
-                                  style: style,
-                                ),
-                              ),
-                            ],
-                          ),
+                        offset: Offset(
+                          start + (end - start) * _controller.value,
+                          0,
                         ),
+                        child: child,
                       );
                     },
+                    child: OverflowBox(
+                      alignment: Alignment.centerLeft,
+                      minWidth: textWidth,
+                      maxWidth: textWidth,
+                      child: Text(
+                        message,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.clip,
+                        textScaler: textScaler,
+                        style: style,
+                      ),
+                    ),
                   );
                 },
               ),
@@ -238,25 +289,31 @@ class LobbyGameCategoryTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scale = lobbyChromeScale(context);
     return SizedBox(
-      height: 36,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 3),
-        children: [
-          _CategoryTab(
-            label: '全部',
-            selected: selectedId == 0,
-            onTap: () => onSelected(0),
-          ),
-          for (final category in categories)
-            _CategoryTab(
-              key: ValueKey(category.id),
-              label: category.name,
-              selected: selectedId == category.id,
-              onTap: () => onSelected(category.id),
+      height: 62 * scale,
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 2 * scale),
+        child: Row(
+          children: [
+            Expanded(
+              child: _CategoryTab(
+                label: '全部',
+                selected: selectedId == 0,
+                onTap: () => onSelected(0),
+              ),
             ),
-        ],
+            for (final category in categories)
+              Expanded(
+                child: _CategoryTab(
+                  key: ValueKey(category.id),
+                  label: category.name,
+                  selected: selectedId == category.id,
+                  onTap: () => onSelected(category.id),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -276,13 +333,12 @@ class _CategoryTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scale = lobbyChromeScale(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 1),
+      padding: EdgeInsets.symmetric(horizontal: 1.5 * scale),
       child: InkWell(
         onTap: onTap,
         child: Container(
-          constraints: const BoxConstraints(minWidth: 100),
-          padding: const EdgeInsets.symmetric(horizontal: 18),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             border: Border.all(color: const Color(0xFF8A703D), width: 1),
@@ -290,8 +346,8 @@ class _CategoryTab extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: selected
-                  ? const [Color(0xFF5888A8), Color(0xFF284E68)]
-                  : const [Color(0xFF41677F), Color(0xFF203D52)],
+                  ? const [Color(0xFF243C52), Color(0xFF5C849C)]
+                  : const [Color(0xFF162A40), Color(0xFF3E6078)],
             ),
           ),
           child: Text(
@@ -299,9 +355,9 @@ class _CategoryTab extends StatelessWidget {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: selected ? Colors.white : const Color(0xFF101820),
-              fontSize: 16,
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: Colors.white,
+              fontSize: 20 * scale,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w600,
             ),
           ),
         ),
@@ -326,229 +382,94 @@ class LobbyGameTableSection extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final rowWidth = math.max(0, constraints.maxWidth - 3);
-        final markerWidth = rowWidth * 0.31;
-        return Container(
-          margin: const EdgeInsets.only(bottom: 2),
-          decoration: const BoxDecoration(color: Color(0xFF050505)),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Container(
-                height: 34,
-                padding: const EdgeInsets.symmetric(horizontal: 5),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF191710), Color(0xFF080807)],
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        '${desk.gameName}${desk.name}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Color(0xFFF1E7D2),
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
+        final rowWidth = math.max(0.0, constraints.maxWidth - 3);
+        final beadCellWidth = RoadmapBoardSpacing.detail.beadCellWidth(
+          rowWidth,
+        );
+        final markScale = (beadCellWidth / 32).clamp(0.6, 1.7);
+        final boardColor = desk.shuffling
+            ? listShuffleBoardColor
+            : listRoadBoardColor;
+        final lineColor = desk.shuffling
+            ? listShuffleLineColor
+            : listRoadLineColor;
+        return GestureDetector(
+          onTap: onEnter,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            margin: EdgeInsets.only(bottom: 4 * markScale),
+            decoration: const BoxDecoration(color: Color(0xFF050505)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  height: 36 * markScale,
+                  padding: EdgeInsets.symmetric(horizontal: 8 * markScale),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF191710), Color(0xFF080807)],
                     ),
-                    for (final statistic in desk.statistics)
+                  ),
+                  child: Row(
+                    children: [
                       Expanded(
-                        flex: 1,
-                        child: _StatisticText(statistic: statistic),
-                      ),
-                    _DeskStatusLabel(
-                      label: desk.statusLabel,
-                      status: desk.status,
-                    ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(right: 3),
-                child: Stack(
-                  children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        SizedBox(
-                          width: markerWidth,
-                          child: RoadmapGridView(
-                            grid: desk.markerRoad,
-                            cellWidth: 14,
-                            cellHeight: 14,
-                            visibleRows: beadPlateRows,
-                            visibleColumns: beadPlateColumns,
-                            squareCells: true,
+                        flex: 2,
+                        child: Text(
+                          '${desk.gameName}${desk.name}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: const Color(0xFFF1E7D2),
+                            fontSize: 16 * markScale,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                        const SizedBox(width: 2),
+                      ),
+                      for (final statistic in desk.statistics)
                         Expanded(
-                          child: LayoutBuilder(
-                            builder: (context, roadConstraints) {
-                              final wideDerivedRoadWidth =
-                                  roadConstraints.maxWidth *
-                                  bigEyeBoyColumns /
-                                  bigRoadColumns;
-                              final narrowDerivedRoadWidth =
-                                  roadConstraints.maxWidth -
-                                  wideDerivedRoadWidth;
-                              final derivedCellHeight =
-                                  roadConstraints.maxWidth / bigRoadColumns;
-                              return Stack(
-                                children: [
-                                  Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      RoadmapGridView(
-                                        grid: desk.bigRoad,
-                                        cellWidth: 12,
-                                        cellHeight: 12,
-                                        visibleRows: bigRoadRows,
-                                        visibleColumns: bigRoadColumns,
-                                        squareCells: true,
-                                      ),
-                                      Row(
-                                        children: [
-                                          SizedBox(
-                                            width: wideDerivedRoadWidth,
-                                            child: RoadmapGridView(
-                                              grid: desk.bigEyeRoad,
-                                              cellWidth: 12,
-                                              cellHeight: 12,
-                                              visibleRows: bigEyeBoyRows,
-                                              visibleColumns: bigEyeBoyColumns,
-                                              squareCells: true,
-                                            ),
-                                          ),
-                                          SizedBox(
-                                            width: narrowDerivedRoadWidth,
-                                            child: RoadmapGridView(
-                                              grid: desk.cockroachRoad,
-                                              cellWidth: 12,
-                                              cellHeight: derivedCellHeight,
-                                              visibleRows: cockroachPigRows,
-                                              visibleColumns:
-                                                  cockroachPigColumns,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Row(
-                                        children: [
-                                          SizedBox(
-                                            width: wideDerivedRoadWidth,
-                                            child: RoadmapGridView(
-                                              grid: desk.smallRoad,
-                                              cellWidth: 12,
-                                              cellHeight: 12,
-                                              visibleRows: smallRoadRows,
-                                              visibleColumns: smallRoadColumns,
-                                              squareCells: true,
-                                            ),
-                                          ),
-                                          SizedBox(
-                                            width: narrowDerivedRoadWidth,
-                                            child: RoadmapGridView(
-                                              grid: desk.secondBigRoad,
-                                              cellWidth: 12,
-                                              cellHeight: derivedCellHeight,
-                                              visibleRows: secondBigRoadRows,
-                                              visibleColumns:
-                                                  secondBigRoadColumns,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                  if (desk.resultCount == 0)
-                                    const Positioned.fill(
-                                      child: IgnorePointer(
-                                        child: Center(
-                                          child: Text(
-                                            '暂无路单',
-                                            style: TextStyle(
-                                              color: Color(0xFF686868),
-                                              fontSize: 13,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              );
-                            },
+                          flex: 1,
+                          child: _StatisticText(
+                            statistic: statistic,
+                            scale: markScale,
                           ),
                         ),
-                      ],
-                    ),
-                    if (isTrial)
-                      const Positioned.fill(
-                        child: IgnorePointer(
-                          child: Center(child: _TrialWatermark()),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              Container(
-                constraints: const BoxConstraints(minHeight: 27),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        '限红 ${desk.minBet}-${desk.maxBet}',
-                        style: const TextStyle(
-                          color: Color(0xFFD8C99F),
-                          fontSize: 10,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      '共 ${desk.resultCount} 局',
-                      style: const TextStyle(
-                        color: Color(0xFFD8C99F),
-                        fontSize: 10,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(6, 0, 6, 5),
-                child: SizedBox(
-                  height: 32,
-                  child: TextButton(
-                    onPressed: onEnter,
-                    style: TextButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      backgroundColor: desk.gameType.toUpperCase() == 'BACCARAT'
-                          ? const Color(0xFF176443)
-                          : const Color(0xFF744344),
-                      foregroundColor: Colors.white,
-                      shape: const RoundedRectangleBorder(),
-                      side: const BorderSide(color: Color(0x99E8C872)),
-                    ),
-                    child: const Text(
-                      '进入牌桌',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                    ],
                   ),
                 ),
-              ),
-            ],
+                if (_showsBettingProgress(desk))
+                  _BettingProgressBar(
+                    progress: desk.remainingSeconds / desk.bettingSeconds,
+                    height: (beadCellWidth * 0.16).clamp(3.0, 7.0),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(right: 3),
+                  child: Stack(
+                    children: [
+                      RoadmapBoard(
+                        markerRoad: desk.markerRoad,
+                        bigRoad: desk.bigRoad,
+                        bigEyeRoad: desk.bigEyeRoad,
+                        smallRoad: desk.smallRoad,
+                        cockroachRoad: desk.cockroachRoad,
+                        secondBigRoad: desk.secondBigRoad,
+                        boardColor: boardColor,
+                        lineColor: lineColor,
+                      ),
+                      if (isTrial || desk.shuffling)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: _ListRoadStamp(
+                              shuffling: desk.shuffling,
+                              isTrial: isTrial,
+                              cellWidth: beadCellWidth / 2,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -600,9 +521,10 @@ class LobbyStateMessage extends StatelessWidget {
 }
 
 class _StatisticText extends StatelessWidget {
-  const _StatisticText({required this.statistic});
+  const _StatisticText({required this.statistic, required this.scale});
 
   final LobbyOutcomeStat statistic;
+  final double scale;
 
   @override
   Widget build(BuildContext context) {
@@ -612,7 +534,7 @@ class _StatisticText extends StatelessWidget {
         fit: BoxFit.scaleDown,
         child: RichText(
           text: TextSpan(
-            style: const TextStyle(fontSize: 13),
+            style: TextStyle(fontSize: 14 * scale),
             children: [
               TextSpan(
                 text: '${statistic.label}:',
@@ -620,8 +542,8 @@ class _StatisticText extends StatelessWidget {
               ),
               TextSpan(
                 text: '${statistic.count}',
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: _roadColor(statistic.color),
                   fontWeight: FontWeight.w700,
                 ),
               ),
@@ -633,34 +555,90 @@ class _StatisticText extends StatelessWidget {
   }
 }
 
-class _DeskStatusLabel extends StatelessWidget {
-  const _DeskStatusLabel({required this.label, required this.status});
+/// 试玩中 sits on the center of the whole right-hand roadmap. While shuffling,
+/// 洗牌中... stays above that same stamp so the stamp does not move.
+class _ListRoadStamp extends StatelessWidget {
+  const _ListRoadStamp({
+    required this.shuffling,
+    required this.isTrial,
+    required this.cellWidth,
+  });
 
-  final String label;
-  final String? status;
+  final bool shuffling;
+  final bool isTrial;
+  final double cellWidth;
 
   @override
   Widget build(BuildContext context) {
-    final color = status == 'betting'
-        ? const Color(0xFF64D79A)
-        : status == 'dealing'
-        ? const Color(0xFFFF9A7B)
-        : const Color(0xFFE3C66E);
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 120),
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFF17140D),
-        border: Border.all(color: color.withValues(alpha: 0.55)),
+    final stamp = isTrial ? _TrialWatermark(cellWidth: cellWidth) : null;
+    if (!shuffling) return Center(child: stamp);
+    final label = _ShufflingLabel(cellWidth: cellWidth);
+    if (!isTrial) return Center(child: label);
+    return Center(
+      child: Stack(
+        alignment: Alignment.center,
+        clipBehavior: Clip.none,
+        children: [
+          stamp!,
+          Transform.translate(
+            offset: Offset(0, -cellWidth * 1.6),
+            child: label,
+          ),
+        ],
       ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
+    );
+  }
+}
+
+class _ShufflingLabel extends StatelessWidget {
+  const _ShufflingLabel({required this.cellWidth});
+
+  final double cellWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '洗牌中...',
+      style: TextStyle(
+        color: const Color(0xF2F20300),
+        fontSize: cellWidth * 2.05,
+        fontStyle: FontStyle.italic,
+        fontWeight: FontWeight.w800,
+        height: 1,
+      ),
+    );
+  }
+}
+
+const _trialStampColor = Color(0xF2C44746);
+
+bool _showsBettingProgress(LobbyDeskDashboardData desk) {
+  return !desk.shuffling &&
+      desk.status == 'betting' &&
+      desk.bettingSeconds > 0 &&
+      desk.remainingSeconds > 0;
+}
+
+class _BettingProgressBar extends StatelessWidget {
+  const _BettingProgressBar({required this.progress, required this.height});
+
+  final double progress;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '下注进度',
+      child: SizedBox(
+        key: const Key('betting-progress'),
+        height: height,
+        child: ColoredBox(
+          color: const Color(0xFF14365F),
+          child: FractionallySizedBox(
+            alignment: Alignment.centerLeft,
+            widthFactor: progress.clamp(0.0, 1.0),
+            child: const ColoredBox(color: Color(0xFF2F9BFF)),
+          ),
         ),
       ),
     );
@@ -668,22 +646,30 @@ class _DeskStatusLabel extends StatelessWidget {
 }
 
 class _TrialWatermark extends StatelessWidget {
-  const _TrialWatermark();
+  const _TrialWatermark({required this.cellWidth});
+
+  final double cellWidth;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: const Color(0x99EF3038), width: 1.6),
+      padding: EdgeInsets.symmetric(
+        horizontal: cellWidth * 1.05,
+        vertical: cellWidth * 0.42,
       ),
-      child: const Text(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: _trialStampColor,
+          width: (cellWidth * 0.07).clamp(1.0, 2.2),
+        ),
+      ),
+      child: Text(
         '试玩中',
         style: TextStyle(
-          color: Color(0xB3EF3038),
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-          height: 1.1,
+          color: _trialStampColor,
+          fontSize: cellWidth * 1.22,
+          fontWeight: FontWeight.w500,
+          height: 1,
         ),
       ),
     );

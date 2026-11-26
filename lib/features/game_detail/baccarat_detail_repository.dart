@@ -1,7 +1,8 @@
-import '../../core/constants/app_constants.dart';
 import '../../core/network/api_client.dart';
+import '../../core/network/app_endpoints.dart';
 import '../lobby/realtime/lobby_socket_service.dart';
 import 'baccarat_detail_models.dart';
+import 'repeat_bet.dart';
 
 class BaccaratDetailRepository {
   BaccaratDetailRepository(this._api);
@@ -10,8 +11,8 @@ class BaccaratDetailRepository {
 
   Future<BaccaratDeskDetail> getDesk(int deskId, String token) async {
     final response = await _api.getJson(
-      '/user/desks',
-      query: const {'site_name': 'user'},
+      AppEndpoints.desks,
+      query: AppEndpoints.siteNameUserQuery,
       token: token,
     );
     final data = response['data'];
@@ -34,7 +35,7 @@ class BaccaratDetailRepository {
     String token,
   ) async {
     final response = await _api.getJson(
-      '/user/results_by_desk/$deskId',
+      AppEndpoints.resultsByDesk(deskId),
       token: token,
     );
     final data = response['data'];
@@ -50,7 +51,7 @@ class BaccaratDetailRepository {
 
   Future<BaccaratRoundStatus> getRoundStatus(int deskId, String token) async {
     final response = await _api.getJson(
-      '${AppConstants.lastRoundStatusPath}/$deskId',
+      AppEndpoints.lastRoundStatusFor(deskId),
       token: token,
     );
     return BaccaratRoundStatus.fromApi(response);
@@ -62,7 +63,7 @@ class BaccaratDetailRepository {
   ) async {
     if (lastRoundId == null) return _emptyConfirmedBets;
     final response = await _api.getJson(
-      '/user/confirm_bets/$lastRoundId',
+      AppEndpoints.confirmBets(lastRoundId),
       token: token,
     );
     return BaccaratConfirmedBets.fromApi(response);
@@ -71,14 +72,14 @@ class BaccaratDetailRepository {
   Future<BaccaratPoolTotals> getPoolTotals(int? roundId, String token) async {
     if (roundId == null) return BaccaratPoolTotals.empty;
     final response = await _api.getJson(
-      '/user/round_pool_totals/$roundId',
+      AppEndpoints.roundPoolTotals(roundId),
       token: token,
     );
     return BaccaratPoolTotals.fromApi(response);
   }
 
   Future<BaccaratMemberProfile> getProfile(String token) async {
-    final response = await _api.getJson('/user/profile', token: token);
+    final response = await _api.getJson(AppEndpoints.profile, token: token);
     return BaccaratMemberProfile.fromApi(response);
   }
 
@@ -89,7 +90,7 @@ class BaccaratDetailRepository {
     required String csrfToken,
   }) async {
     final response = await _api.postJson(
-      '/user/bet_results',
+      AppEndpoints.betResults,
       token: token,
       csrfToken: csrfToken,
       body: {
@@ -111,7 +112,7 @@ class BaccaratDetailRepository {
     required String csrfToken,
   }) async {
     final response = await _api.postJson(
-      '/user/cancle_bet_results',
+      AppEndpoints.cancelBetResults,
       token: token,
       csrfToken: csrfToken,
       body: {'last_round': lastRoundId},
@@ -125,7 +126,7 @@ class BaccaratDetailRepository {
   }) async {
     final day = _dateString(date);
     final response = await _api.getJson(
-      '/user/member_ledger',
+      AppEndpoints.memberLedger,
       query: {'startDate': day, 'endDate': day, 'page': '1', 'limit': '20'},
       token: token,
     );
@@ -135,6 +136,38 @@ class BaccaratDetailRepository {
       throw const FormatException('投注记录响应缺少 memberReports');
     }
     return List.unmodifiable(reports.map(BaccaratLedgerEntry.fromJson));
+  }
+
+  /// Newest stake rows for one desk. `tableNo` is the desk id on this route.
+  Future<List<DeskStakeRow>> recentDeskStakes({
+    required String token,
+    required int deskId,
+  }) async {
+    final response = await _api.getJson(
+      AppEndpoints.memberLedger,
+      query: {'tableNo': '$deskId', 'page': '1', 'limit': '20'},
+      token: token,
+    );
+    final data = response['data'];
+    final reports = data is Map ? data['memberReports'] : null;
+    if (reports is! List) {
+      throw const FormatException('投注记录响应缺少 memberReports');
+    }
+    final rows = <DeskStakeRow>[];
+    for (final item in reports) {
+      if (item is! Map) continue;
+      if (item['row_kind']?.toString() == 'wallet') continue;
+      if (item['cancel_flg'] == true) continue;
+      final betName = item['bet_name']?.toString() ?? '';
+      if (betName.trim().isEmpty) continue;
+      rows.add(
+        DeskStakeRow(
+          deskName: item['desk_name']?.toString() ?? '',
+          betName: betName,
+        ),
+      );
+    }
+    return List.unmodifiable(rows);
   }
 }
 

@@ -26,6 +26,13 @@ class LocalStorage {
   String? getRememberedAccount() =>
       _prefs.getString(AppConstants.keyRememberedAccount);
 
+  bool get gameVoiceEnabled =>
+      _prefs.getBool(AppConstants.keyGameVoiceEnabled) ?? true;
+
+  Future<void> setGameVoiceEnabled(bool enabled) async {
+    await _prefs.setBool(AppConstants.keyGameVoiceEnabled, enabled);
+  }
+
   Future<void> setRememberedAccount(String? account) async {
     if (account == null || account.isEmpty) {
       await _prefs.remove(AppConstants.keyRememberedAccount);

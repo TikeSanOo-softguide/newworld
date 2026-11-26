@@ -4,11 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 
-import '../../../core/constants/app_constants.dart';
+import '../../../core/config/app_config.dart';
 import '../models/lobby_round_result.dart';
+import 'live_table_events.dart';
 
 final lobbySocketServiceProvider = Provider<LobbySocketService>((ref) {
-  final service = LobbySocketService(apiBaseUrl: AppConstants.apiBaseUrl);
+  final service = LobbySocketService(apiBaseUrl: AppConfig.apiBaseUrl);
   ref.onDispose(service.dispose);
   return service;
 });
@@ -104,6 +105,13 @@ class LobbySocketService {
   final _statuses = StreamController<LobbySocketStatus>.broadcast(sync: true);
   final _protocolErrors = StreamController<String>.broadcast(sync: true);
   final _deskUpdates = StreamController<LobbyDeskUpdate>.broadcast(sync: true);
+  final _cards = StreamController<DeskCardSnapshot>.broadcast(sync: true);
+  final _balances = StreamController<MemberBalanceChange>.broadcast(sync: true);
+  final _forceLogouts = StreamController<MemberForceLogout>.broadcast(
+    sync: true,
+  );
+  final Map<int, DeskCardSnapshot> _cardsByDesk = {};
+  MemberForceLogout? _unclaimedForceLogout;
 
   LobbySocketConnection? _socket;
   String? _token;
@@ -119,7 +127,32 @@ class LobbySocketService {
   Stream<LobbySocketStatus> get statuses => _statuses.stream;
   Stream<String> get protocolErrors => _protocolErrors.stream;
   Stream<LobbyDeskUpdate> get deskUpdates => _deskUpdates.stream;
+  Stream<DeskCardSnapshot> get cardSnapshots => _cards.stream;
+  Stream<MemberBalanceChange> get balanceChanges => _balances.stream;
+  Stream<MemberForceLogout> get forceLogouts => _forceLogouts.stream;
   bool get connected => _socket?.connected ?? false;
+
+  DeskCardSnapshot? cardSnapshotFor(int deskId) => _cardsByDesk[deskId];
+
+  /// Drops the cached hand without emitting. Used when the open round changed
+  /// and the cached cards must not be replayed as a live snapshot.
+  void dropCardSnapshot(int deskId) {
+    _cardsByDesk.remove(deskId);
+  }
+
+  /// Drops the hand for [deskId] and emits an empty snapshot.
+  void forgetCardSnapshot(int deskId) {
+    _cardsByDesk.remove(deskId);
+    if (_cards.isClosed) return;
+    _cards.add(DeskCardSnapshot.empty(deskId));
+  }
+
+  /// The first listener to claim [event] handles logout. Later listeners no-op.
+  bool claimForceLogout(MemberForceLogout event) {
+    if (!identical(_unclaimedForceLogout, event)) return false;
+    _unclaimedForceLogout = null;
+    return true;
+  }
 
   void connect({required String token, required Iterable<int> deskIds}) {
     if (token.trim().isEmpty) {
@@ -181,6 +214,9 @@ class LobbySocketService {
     unawaited(_statuses.close());
     unawaited(_protocolErrors.close());
     unawaited(_deskUpdates.close());
+    unawaited(_cards.close());
+    unawaited(_balances.close());
+    unawaited(_forceLogouts.close());
   }
 
   void _attachListeners(LobbySocketConnection socket) {
@@ -227,8 +263,16 @@ class LobbySocketService {
       );
     };
     _onAny = (event, payload) {
+      if (event == 'member_balance:change') {
+        _emitBalance(payload);
+        return;
+      }
+      if (event == 'online_player:force_logout') {
+        _emitForceLogout(payload);
+        return;
+      }
       final match = RegExp(
-        r'^desk:(\d+):(updateResult|updateTimer|updateStatus|roundPoolTotals|finish-session)$',
+        r'^desk:(\d+):(updateResult|updateTimer|updateStatus|roundPoolTotals|finish-session|finish_session|dealCard|deleteLastCard)$',
       ).firstMatch(event);
       if (match == null) return;
       final deskId = int.parse(match.group(1)!);
@@ -279,7 +323,12 @@ class LobbySocketService {
             _protocolErrors.add(error.message);
           }
         case 'finish-session':
+        case 'finish_session':
           _deskUpdates.add(LobbyDeskSessionFinished(deskId: deskId));
+        case 'dealCard':
+          _emitDealCard(deskId, payload);
+        case 'deleteLastCard':
+          _emitDeleteLastCard(deskId, payload);
       }
     };
 
@@ -304,6 +353,51 @@ class LobbySocketService {
 
       _managerListeners[event] = handler;
       socket.onManagerEvent(event, handler);
+    }
+  }
+
+  void _emitBalance(Object? payload) {
+    try {
+      _balances.add(MemberBalanceChange.fromPayload(payload));
+    } on FormatException catch (error) {
+      _debugLog('invalid balance payload error=${error.message}');
+      _protocolErrors.add(error.message);
+    }
+  }
+
+  void _emitForceLogout(Object? payload) {
+    try {
+      final logout = MemberForceLogout.fromPayload(payload);
+      _unclaimedForceLogout = logout;
+      _forceLogouts.add(logout);
+    } on FormatException catch (error) {
+      _debugLog('invalid force logout payload error=${error.message}');
+      _protocolErrors.add(error.message);
+    }
+  }
+
+  void _emitDealCard(int deskId, Object? payload) {
+    try {
+      final snapshot = DeskCardSnapshot.fromDeal(deskId, payload);
+      _cardsByDesk[deskId] = snapshot;
+      _cards.add(snapshot);
+    } on FormatException catch (error) {
+      _debugLog('invalid dealCard deskId=$deskId error=${error.message}');
+      _protocolErrors.add(error.message);
+    }
+  }
+
+  void _emitDeleteLastCard(int deskId, Object? payload) {
+    final current = _cardsByDesk[deskId];
+    if (current == null || current.kind != DeskCardKind.baccarat) return;
+    final position = payload is Map ? payload['position']?.toString() : null;
+    try {
+      final snapshot = current.deleteLast(position);
+      _cardsByDesk[deskId] = snapshot;
+      _cards.add(snapshot);
+    } on FormatException catch (error) {
+      _debugLog('invalid deleteLastCard deskId=$deskId error=${error.message}');
+      _protocolErrors.add(error.message);
     }
   }
 

@@ -4,8 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
-import '../../core/constants/app_constants.dart';
 import '../../core/network/api_client.dart';
+import '../../core/network/app_endpoints.dart';
 import '../../core/storage/local_storage.dart';
 import '../../core/storage/secure_storage.dart';
 import '../lobby/realtime/lobby_socket_service.dart';
@@ -78,7 +78,7 @@ class AuthService {
 
     try {
       final json = await _api.postJson(
-        AppConstants.loginPath,
+        AppEndpoints.login,
         body: {
           'account': trimmed,
           'password': password,
@@ -161,7 +161,7 @@ class AuthService {
     final csrf = await _secure.getCsrfToken();
     try {
       await _api.putJson(
-        AppConstants.changePasswordPath,
+        AppEndpoints.changePassword,
         token: token,
         csrfToken: csrf,
         body: {
@@ -189,7 +189,7 @@ class AuthService {
 
     try {
       final json = await _api.getJson(
-        '${AppConstants.userByIdPath}/$userId',
+        AppEndpoints.userById(userId),
         token: token,
       );
       final data = json['data'];
@@ -224,7 +224,7 @@ class AuthService {
       final parsedId = int.tryParse(userId);
       try {
         await _api.postJson(
-          AppConstants.logoutPath,
+          AppEndpoints.logout,
           token: token,
           body: {'userId': parsedId ?? userId},
         );

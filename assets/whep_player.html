@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; }
+    video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+  </style>
+</head>
+<body>
+  <video id="v" autoplay playsinline muted></video>
+  <script>
+    var pc = null;
+    var video = document.getElementById("v");
+
+    function post(message) {
+      if (window.WhepBridge) WhepBridge.postMessage(JSON.stringify(message));
+    }
+
+    function waitForIce(peer) {
+      if (peer.iceGatheringState === "complete") return Promise.resolve();
+      return new Promise(function (resolve) {
+        var timer = setTimeout(done, 2000);
+        function done() {
+          clearTimeout(timer);
+          peer.removeEventListener("icegatheringstatechange", onChange);
+          resolve();
+        }
+        function onChange() {
+          if (peer.iceGatheringState === "complete") done();
+        }
+        peer.addEventListener("icegatheringstatechange", onChange);
+      });
+    }
+
+    function startOffer() {
+      if (pc) {
+        pc.ontrack = null;
+        pc.onconnectionstatechange = null;
+        pc.close();
+      }
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+      });
+      pc.addTransceiver("video", { direction: "recvonly" });
+      pc.addTransceiver("audio", { direction: "recvonly" });
+      pc.ontrack = function (event) {
+        var stream = event.streams && event.streams[0];
+        if (stream && video.srcObject !== stream) {
+          video.srcObject = stream;
+          video.play().catch(function () {});
+        }
+      };
+      pc.onconnectionstatechange = function () {
+        if (pc && pc.connectionState === "failed") post({ type: "failed" });
+      };
+      video.onplaying = function () { post({ type: "playing" }); };
+      return pc.createOffer().then(function (offer) {
+        return pc.setLocalDescription(offer);
+      }).then(function () {
+        return waitForIce(pc);
+      }).then(function () {
+        post({ type: "offer", sdp: pc.localDescription.sdp });
+      }).catch(function () {
+        post({ type: "failed" });
+      });
+    }
+
+    function applyAnswer(sdp) {
+      if (!pc) {
+        post({ type: "failed" });
+        return;
+      }
+      pc.setRemoteDescription({ type: "answer", sdp: sdp }).catch(function () {
+        post({ type: "failed" });
+      });
+    }
+
+    function setMuted(muted) {
+      video.muted = muted === true || muted === "true";
+      if (!video.muted) video.play().catch(function () {});
+    }
+
+    function pausePlayback() {
+      video.pause();
+    }
+
+    function resumePlayback() {
+      video.play().catch(function () {});
+    }
+  </script>
+</body>
+</html>

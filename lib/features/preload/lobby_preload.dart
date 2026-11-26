@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/constants/app_constants.dart';
 import '../../core/network/api_client.dart';
+import '../../core/network/app_endpoints.dart';
 import '../lobby/models/lobby_round_result.dart';
 
 final lobbyPreloadProvider =
@@ -38,6 +38,7 @@ class LobbyPreloadNotifier extends Notifier<LobbySnapshot> {
   void synchronizeDeskResults({
     required Map<int, List<LobbyRoundResult>> histories,
     required Map<int, int?> sessionIds,
+    Map<int, Object?> lastRounds = const {},
   }) {
     final desks = state.desks
         .map((desk) {
@@ -60,7 +61,28 @@ class LobbyPreloadNotifier extends Notifier<LobbySnapshot> {
                       ...Map<String, dynamic>.from(desk['session'] as Map),
                     'id': nextSessionId,
                   },
+            if (lastRounds.containsKey(deskId))
+              'last_round': _copyDeskValue(lastRounds[deskId]),
             'results': results.map((item) => item.toApiJson()).toList(),
+          };
+        })
+        .toList(growable: false);
+    state = _copyWithDesks(desks);
+  }
+
+  /// Updates session and last-round fields without replacing roadmap history.
+  void updateDeskSessionFields({
+    required Map<int, Object?> sessions,
+    required Map<int, Object?> lastRounds,
+  }) {
+    final desks = state.desks
+        .map((desk) {
+          final deskId = _asInt(desk['id']);
+          if (deskId == null || !sessions.containsKey(deskId)) return desk;
+          return {
+            ...desk,
+            'session': _copyDeskValue(sessions[deskId]),
+            'last_round': _copyDeskValue(lastRounds[deskId]),
           };
         })
         .toList(growable: false);
@@ -88,6 +110,11 @@ List<LobbyRoundResult> _parseDeskResults(int deskId, Object? raw) {
     }
   }
   return results;
+}
+
+Object? _copyDeskValue(Object? value) {
+  if (value is Map) return Map<String, dynamic>.from(value);
+  return value;
 }
 
 int? _sessionId(Object? raw) {
@@ -174,13 +201,13 @@ class ApiPreloadLoader implements PreloadLoader {
 
     final results = await Future.wait([
       run('games', () async {
-        final json = await _api.getJson(AppConstants.publicGamesPath);
+        final json = await _api.getJson(AppEndpoints.publicGames);
         return extractNamedList(json, 'games');
       }),
       run('desks', () async {
         final json = await _api.getJson(
-          AppConstants.publicDesksPath,
-          query: const {'site_name': 'user'},
+          AppEndpoints.publicDesks,
+          query: AppEndpoints.siteNameUserQuery,
         );
         return extractNamedList(
           json,
@@ -188,14 +215,14 @@ class ApiPreloadLoader implements PreloadLoader {
         ).where(isOnlineBettingDesk).toList();
       }),
       run('cameras', () async {
-        final json = await _api.getJson(AppConstants.publicCamerasPath);
+        final json = await _api.getJson(AppEndpoints.publicCameras);
         return extractNamedList(
           json,
           'cameras',
         ).map(projectCameraRecord).toList(growable: false);
       }),
       run('settings', () async {
-        final json = await _api.getJson(AppConstants.publicSettingsPath);
+        final json = await _api.getJson(AppEndpoints.publicSettings);
         return extractNamedList(json, 'parameterSettings');
       }),
     ]);

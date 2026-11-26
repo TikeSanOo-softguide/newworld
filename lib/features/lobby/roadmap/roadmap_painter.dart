@@ -13,6 +13,12 @@ class RoadmapGridView extends StatelessWidget {
     this.visibleRows,
     this.visibleColumns,
     this.squareCells = false,
+    this.heightOverWidth,
+    this.boardColor = const Color(0xFFFFFFFF),
+    this.gridLineColor = const Color(0xFF858585),
+    this.gridLineWidth = 0.65,
+    this.referenceMarkers = false,
+    this.subcellGrid = false,
   });
 
   final RoadmapGrid grid;
@@ -21,6 +27,20 @@ class RoadmapGridView extends StatelessWidget {
   final int? visibleRows;
   final int? visibleColumns;
   final bool squareCells;
+
+  /// Cell height divided by cell width. The lobby still uses 28/32.
+  final double? heightOverWidth;
+  final Color boardColor;
+  final Color gridLineColor;
+  final double gridLineWidth;
+
+  /// List-page marker size, stroke, and color taken from the roadmap reference.
+  final bool referenceMarkers;
+
+  /// Draws a line through the middle of each logical cell. Derived-road
+  /// markers already sit in those halves. Detail page 3 uses this so the
+  /// empty board matches the fine reference grid. The list board does not.
+  final bool subcellGrid;
 
   int get _visualRows =>
       visibleRows ??
@@ -57,7 +77,9 @@ class RoadmapGridView extends StatelessWidget {
             ? constraints.maxWidth
             : cellWidth * columnLimit;
         final displayCellWidth = viewportWidth / columnLimit;
-        final displayCellHeight = squareCells ? displayCellWidth : cellHeight;
+        final displayCellHeight = heightOverWidth != null
+            ? displayCellWidth * heightOverWidth!
+            : (squareCells ? displayCellWidth : cellHeight);
         final displayHeight = displayCellHeight * _visualRows;
         final displayGrid = _slidingWindowGrid(grid, columnLimit);
         return SizedBox(
@@ -116,6 +138,11 @@ class RoadmapGridView extends StatelessWidget {
       cellWidth: width,
       cellHeight: paintCellHeight ?? cellHeight,
       visualRows: visualRows ?? _visualRows,
+      boardColor: boardColor,
+      gridLineColor: gridLineColor,
+      gridLineWidth: gridLineWidth,
+      referenceMarkers: referenceMarkers,
+      subcellGrid: subcellGrid,
     );
     if (displayGrid == null) {
       return CustomPaint(
@@ -139,12 +166,22 @@ class RoadmapGridPainter extends CustomPainter {
     required this.cellWidth,
     required this.cellHeight,
     required this.visualRows,
+    this.boardColor = const Color(0xFFFFFFFF),
+    this.gridLineColor = const Color(0xFF858585),
+    this.gridLineWidth = 0.65,
+    this.referenceMarkers = false,
+    this.subcellGrid = false,
   });
 
   final RoadmapGrid grid;
   final double cellWidth;
   final double cellHeight;
   final int visualRows;
+  final Color boardColor;
+  final Color gridLineColor;
+  final double gridLineWidth;
+  final bool referenceMarkers;
+  final bool subcellGrid;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -152,7 +189,7 @@ class RoadmapGridPainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(boardRect);
 
-    canvas.drawRect(boardRect, Paint()..color = const Color(0xFFFFFFFF));
+    canvas.drawRect(boardRect, Paint()..color = boardColor);
     _drawGridLines(canvas, size);
     for (final entry in grid.markers.entries) {
       _drawMarker(canvas, entry.key, entry.value);
@@ -163,15 +200,20 @@ class RoadmapGridPainter extends CustomPainter {
 
   void _drawGridLines(Canvas canvas, Size size) {
     final linePaint = Paint()
-      ..color = const Color(0xFF858585)
-      ..strokeWidth = 0.65;
+      ..color = gridLineColor
+      ..strokeWidth = gridLineWidth;
+    final subdivisions = subcellGrid ? 2 : 1;
+    final columnLines = grid.columnCount * subdivisions;
+    final rowLines = visualRows * subdivisions;
+    final columnStep = cellWidth / subdivisions;
+    final rowStep = cellHeight / subdivisions;
 
-    for (var col = 0; col <= grid.columnCount; col++) {
-      final x = col * cellWidth;
+    for (var col = 0; col <= columnLines; col++) {
+      final x = col * columnStep;
       canvas.drawLine(Offset(x, 0), Offset(x, size.height), linePaint);
     }
-    for (var row = 0; row <= visualRows; row++) {
-      final y = row * cellHeight;
+    for (var row = 0; row <= rowLines; row++) {
+      final y = row * rowStep;
       canvas.drawLine(Offset(0, y), Offset(size.width, y), linePaint);
     }
   }
@@ -207,13 +249,27 @@ class RoadmapGridPainter extends CustomPainter {
 
     switch (marker.shape) {
       case RoadmapMarkerShape.ring:
-        final radius = switch (grid.type) {
-          RoadmapType.bigEye =>
-            math.min(cellWidthForMarker, cellHeightForMarker) * 0.28,
-          RoadmapType.marker || RoadmapType.big || RoadmapType.secondBig =>
-            math.min(cellWidthForMarker, cellHeightForMarker) * 0.40,
-          _ => math.min(cellWidthForMarker, cellHeightForMarker) * 0.38,
-        };
+        final span = math.min(cellWidthForMarker, cellHeightForMarker);
+        // Reference rings are circles. Bead rings are 90% of the shorter
+        // cell side. Big-road rings are 85% of the longer side, which meets
+        // the top and bottom grid lines of the shorter cell.
+        final radius = referenceMarkers
+            ? switch (grid.type) {
+                RoadmapType.bigEye => span * 0.36,
+                RoadmapType.marker => span * 0.46,
+                RoadmapType.big || RoadmapType.secondBig => span * 0.44,
+                _ => span * 0.42,
+              }
+            : switch (grid.type) {
+                RoadmapType.bigEye => span * 0.40,
+                RoadmapType.marker ||
+                RoadmapType.big ||
+                RoadmapType.secondBig => span * 0.42,
+                _ => span * 0.38,
+              };
+        final strokeWidth = referenceMarkers
+            ? math.max(1.0, radius * 0.16)
+            : (grid.type == RoadmapType.marker ? 1.8 : 1.45);
         if (marker.color != null) {
           canvas.drawCircle(
             center,
@@ -221,18 +277,14 @@ class RoadmapGridPainter extends CustomPainter {
             Paint()
               ..color = color
               ..style = PaintingStyle.stroke
-              ..strokeWidth = grid.type == RoadmapType.marker ? 1.8 : 1.45,
+              ..strokeWidth = strokeWidth,
           );
         }
         if (marker.label != null && marker.label!.isNotEmpty) {
-          _drawText(
-            canvas,
-            marker.label!,
-            center,
-            color,
-            math.max(6, math.min(13, radius * 1.05)),
-            bold: true,
-          );
+          final fontSize = referenceMarkers
+              ? math.max(8.0, radius * 1.35)
+              : math.max(6.0, math.min(13.0, radius * 1.05));
+          _drawText(canvas, marker.label!, center, color, fontSize, bold: true);
         }
         if (marker.isBankerPair) {
           _drawPairDot(canvas, center, radius, const Color(0xFFE03B3B), true);
@@ -246,7 +298,7 @@ class RoadmapGridPainter extends CustomPainter {
       case RoadmapMarkerShape.solid:
         canvas.drawCircle(
           center,
-          math.min(cellWidthForMarker, cellHeightForMarker) * 0.24,
+          math.min(cellWidthForMarker, cellHeightForMarker) * 0.36,
           Paint()..color = color,
         );
       case RoadmapMarkerShape.slash:
@@ -254,10 +306,10 @@ class RoadmapGridPainter extends CustomPainter {
           ..color = color
           ..strokeWidth = math.max(
             1.2,
-            math.min(cellWidthForMarker, cellHeightForMarker) * 0.14,
+            math.min(cellWidthForMarker, cellHeightForMarker) * 0.18,
           )
           ..strokeCap = StrokeCap.square;
-        final half = math.min(cellWidthForMarker, cellHeightForMarker) * 0.25;
+        final half = math.min(cellWidthForMarker, cellHeightForMarker) * 0.38;
         canvas.drawLine(
           Offset(center.dx - half, center.dy + half),
           Offset(center.dx + half, center.dy - half),
@@ -291,7 +343,9 @@ class RoadmapGridPainter extends CustomPainter {
     RoadmapMarker marker,
   ) {
     final tiePaint = Paint()
-      ..color = const Color(0xFF13B832)
+      ..color = referenceMarkers
+          ? const Color(0xFF0E7A0C)
+          : const Color(0xFF13B832)
       ..strokeWidth = math.max(1.4, radius * 0.42)
       ..strokeCap = StrokeCap.square;
     canvas.drawLine(
@@ -337,9 +391,12 @@ class RoadmapGridPainter extends CustomPainter {
   }
 
   Color? _colorFor(RoadmapMarkerColor? color) => switch (color) {
-    RoadmapMarkerColor.red => const Color(0xFFD52F38),
-    RoadmapMarkerColor.blue => const Color(0xFF245ED0),
-    RoadmapMarkerColor.green => const Color(0xFF168A3A),
+    RoadmapMarkerColor.red =>
+      referenceMarkers ? const Color(0xFFC41E22) : const Color(0xFFD52F38),
+    RoadmapMarkerColor.blue =>
+      referenceMarkers ? const Color(0xFF1A28E8) : const Color(0xFF245ED0),
+    RoadmapMarkerColor.green =>
+      referenceMarkers ? const Color(0xFF0E7A0C) : const Color(0xFF168A3A),
     RoadmapMarkerColor.black => const Color(0xFF111111),
     null => null,
   };
@@ -349,5 +406,10 @@ class RoadmapGridPainter extends CustomPainter {
       oldDelegate.grid != grid ||
       oldDelegate.cellWidth != cellWidth ||
       oldDelegate.cellHeight != cellHeight ||
-      oldDelegate.visualRows != visualRows;
+      oldDelegate.visualRows != visualRows ||
+      oldDelegate.boardColor != boardColor ||
+      oldDelegate.gridLineColor != gridLineColor ||
+      oldDelegate.gridLineWidth != gridLineWidth ||
+      oldDelegate.referenceMarkers != referenceMarkers ||
+      oldDelegate.subcellGrid != subcellGrid;
 }

@@ -5,17 +5,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 
-import '../../core/constants/app_constants.dart';
 import '../../core/network/api_client.dart';
+import 'lobby_repository.dart';
 import '../../core/router/app_router.dart';
 import '../../core/storage/secure_storage.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/app_dialog.dart';
 import '../auth/auth_service.dart';
+import 'desk_session_state.dart';
 import 'models/lobby_dashboard_data.dart';
 import 'models/lobby_round_result.dart';
 import 'roadmap/roadmap_calculations.dart';
 import 'roadmap/roadmap_models.dart';
+import 'realtime/desk_betting_clock.dart';
+import 'realtime/live_table_events.dart';
 import 'realtime/lobby_socket_service.dart';
 import 'widgets/lobby_dashboard_widgets.dart';
 import '../preload/lobby_preload.dart';
@@ -45,6 +48,11 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
   StreamSubscription<LobbyRoundResult>? _resultSubscription;
   StreamSubscription<LobbySocketStatus>? _socketStatusSubscription;
   StreamSubscription<String>? _protocolErrorSubscription;
+  StreamSubscription<LobbyDeskUpdate>? _deskUpdateSubscription;
+  StreamSubscription<MemberForceLogout>? _forceLogoutSubscription;
+  final Map<int, DeskBettingClock> _clocks = {};
+  final Set<int> _pendingSessionRefresh = {};
+  bool _refreshingSessions = false;
   bool _syncingResults = false;
   bool _resyncRequested = false;
   bool _checkingSocketAuth = false;
@@ -57,6 +65,39 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
     _resultSubscription = _lobbySocket.results.listen((result) {
       if (!mounted) return;
       ref.read(lobbyPreloadProvider.notifier).upsertResult(result);
+      _requestDeskSessionRefresh(result.deskId);
+    });
+    _deskUpdateSubscription = _lobbySocket.deskUpdates.listen((update) {
+      if (!mounted) return;
+      final clock = _clocks[update.deskId] ?? const DeskBettingClock();
+      if (update is LobbyDeskTimerUpdate) {
+        final next = clock.applyTimer(update.remainingSeconds);
+        if (next == null) return;
+        _clocks[update.deskId] = next;
+        _rememberRoundClock(
+          update.deskId,
+          status: next.status,
+          seconds: next.remainingSeconds,
+        );
+        _requestDeskSessionRefresh(update.deskId);
+        return;
+      }
+      if (update is LobbyDeskStatusUpdate) {
+        final next = clock.applyStatus(update.status);
+        _clocks[update.deskId] = next;
+        _rememberRoundClock(
+          update.deskId,
+          status: next.status,
+          seconds: next.remainingSeconds,
+        );
+      }
+      if (update is LobbyDeskStatusUpdate ||
+          update is LobbyDeskSessionFinished) {
+        _requestDeskSessionRefresh(update.deskId);
+      }
+    });
+    _forceLogoutSubscription = _lobbySocket.forceLogouts.listen((logout) {
+      unawaited(_onForceLogout(logout));
     });
     _socketStatusSubscription = _lobbySocket.statuses.listen((status) {
       if (!mounted) return;
@@ -103,7 +144,26 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
     unawaited(_resultSubscription?.cancel());
     unawaited(_socketStatusSubscription?.cancel());
     unawaited(_protocolErrorSubscription?.cancel());
+    unawaited(_deskUpdateSubscription?.cancel());
+    unawaited(_forceLogoutSubscription?.cancel());
     super.dispose();
+  }
+
+  Future<void> _onForceLogout(MemberForceLogout logout) async {
+    if (!mounted) return;
+    int? userId;
+    try {
+      userId = int.tryParse(
+        (await ref.read(secureStorageProvider).getUserId()) ?? '',
+      );
+    } catch (_) {
+      return;
+    }
+    if (!mounted || userId != logout.userId) return;
+    if (!_lobbySocket.claimForceLogout(logout)) return;
+    await ref.read(authServiceProvider).logout();
+    if (!mounted) return;
+    context.go(AppRoutes.login);
   }
 
   Future<void> _loadMember() async {
@@ -140,12 +200,12 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
 
   Future<bool> _syncLobby() async {
     final storage = ref.read(secureStorageProvider);
-    final api = ref.read(apiClientProvider);
+    final lobby = ref.read(lobbyRepositoryProvider);
     final token = await storage.getAuthToken();
     final csrf = await storage.getCsrfToken();
     if (token == null || token.isEmpty) return false;
     try {
-      await api.getJson(AppConstants.verifyPath, token: token);
+      await lobby.verify(token);
     } on ApiException catch (error) {
       if (error.code == 'SESSION_SUPERSEDED') {
         await _kickSuperseded(error.supersededIp);
@@ -161,19 +221,14 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
       return false;
     }
     try {
-      await api.patchJson(
-        AppConstants.roomPath,
-        token: token,
-        csrfToken: csrf,
-        body: const {'room': 'home'},
-      );
+      await lobby.updateRoom(token: token, csrfToken: csrf, room: 'home');
     } on ApiException catch (error) {
       if (error.code == 'SESSION_SUPERSEDED') {
         await _kickSuperseded(error.supersededIp);
         return true;
       }
     } catch (_) {}
-    await _loadRoundStatus(api, token);
+    await _loadRoundStatus(lobby, token);
     return false;
   }
 
@@ -213,13 +268,14 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
       final game = desk['game'];
       final gameMap = game is Map ? game : null;
       final type = gameMap?['type']?.toString() ?? gameById[gameId]?.type ?? '';
-      if (id != null && type.toUpperCase() == 'BACCARAT') {
+      final normalized = type.toUpperCase();
+      if (id != null && (normalized == 'BACCARAT' || normalized == 'LONGHU')) {
         deskIds.add(id);
       }
     }
     debugPrint(
       '[LobbySocket] lobby connect requested '
-      'baccaratDeskCount=${deskIds.length}',
+      'deskCount=${deskIds.length}',
     );
     _lobbySocket.connect(token: token, deskIds: deskIds);
   }
@@ -234,21 +290,14 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
       final storage = ref.read(secureStorageProvider);
       final token = await storage.getAuthToken();
       if (token == null || token.isEmpty) return;
-      final response = await ref
-          .read(apiClientProvider)
-          .getJson(
-            '/user/desks',
-            query: const {'site_name': 'user'},
-            token: token,
-          );
-      final data = response['data'];
-      final rawDesks = data is Map ? data['desks'] : null;
-      if (rawDesks is! List) {
+      final rawDesks = await ref.read(lobbyRepositoryProvider).getDesks(token);
+      if (rawDesks == null) {
         throw const FormatException('桌台同步响应缺少 desks 列表');
       }
 
       final histories = <int, List<LobbyRoundResult>>{};
       final sessionIds = <int, int?>{};
+      final lastRounds = <int, Object?>{};
       for (final rawDesk in rawDesks) {
         if (rawDesk is! Map) {
           throw const FormatException('桌台同步响应包含无效桌台');
@@ -266,6 +315,7 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
             .toList(growable: false);
         final session = rawDesk['session'];
         sessionIds[deskId] = session is Map ? _asInt(session['id']) : null;
+        lastRounds[deskId] = rawDesk['last_round'];
       }
       if (!mounted) return;
       debugPrint(
@@ -275,7 +325,11 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
       );
       ref
           .read(lobbyPreloadProvider.notifier)
-          .synchronizeDeskResults(histories: histories, sessionIds: sessionIds);
+          .synchronizeDeskResults(
+            histories: histories,
+            sessionIds: sessionIds,
+            lastRounds: lastRounds,
+          );
     } on ApiException catch (error) {
       debugPrint(
         '[LobbySocket] desk history API failed '
@@ -309,6 +363,62 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
     }
   }
 
+  void _requestDeskSessionRefresh(int deskId) {
+    if (deskId <= 0) return;
+    _pendingSessionRefresh.add(deskId);
+    if (_refreshingSessions) return;
+    unawaited(_refreshPendingDeskSessions());
+  }
+
+  Future<void> _refreshPendingDeskSessions() async {
+    if (_refreshingSessions) return;
+    _refreshingSessions = true;
+    try {
+      while (_pendingSessionRefresh.isNotEmpty && mounted) {
+        final deskIds = Set<int>.of(_pendingSessionRefresh);
+        _pendingSessionRefresh.clear();
+        await _refreshDeskSessions(deskIds);
+      }
+    } finally {
+      _refreshingSessions = false;
+      if (_pendingSessionRefresh.isNotEmpty && mounted) {
+        unawaited(_refreshPendingDeskSessions());
+      }
+    }
+  }
+
+  Future<void> _refreshDeskSessions(Set<int> deskIds) async {
+    final token = await ref.read(secureStorageProvider).getAuthToken();
+    if (token == null || token.isEmpty || deskIds.isEmpty) return;
+    try {
+      final rawDesks = await ref.read(lobbyRepositoryProvider).getDesks(token);
+      if (rawDesks == null || !mounted) return;
+      final sessions = <int, Object?>{};
+      final lastRounds = <int, Object?>{};
+      for (final rawDesk in rawDesks) {
+        if (rawDesk is! Map) continue;
+        final deskId = _asInt(rawDesk['id']);
+        if (deskId == null || !deskIds.contains(deskId)) continue;
+        sessions[deskId] = rawDesk['session'];
+        lastRounds[deskId] = rawDesk['last_round'];
+      }
+      if (!mounted || sessions.isEmpty) return;
+      ref
+          .read(lobbyPreloadProvider.notifier)
+          .updateDeskSessionFields(sessions: sessions, lastRounds: lastRounds);
+    } on ApiException catch (error) {
+      debugPrint(
+        '[LobbySocket] desk session refresh failed '
+        'status=${error.statusCode} message=${error.message}',
+      );
+      if (error.code == 'SESSION_SUPERSEDED') {
+        await _kickSuperseded(error.supersededIp);
+      }
+    } catch (error) {
+      debugPrint('[LobbySocket] desk session refresh failed: $error');
+    }
+  }
+
   Future<void> _verifySocketAuthentication() async {
     if (_checkingSocketAuth) return;
     _checkingSocketAuth = true;
@@ -319,9 +429,7 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
         if (mounted) context.go(AppRoutes.login);
         return;
       }
-      await ref
-          .read(apiClientProvider)
-          .getJson(AppConstants.verifyPath, token: token);
+      await ref.read(lobbyRepositoryProvider).verify(token);
       if (mounted) {
         setState(() => _realtimeError = '实时连接身份验证失败，请重新登录');
       }
@@ -345,7 +453,7 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
     }
   }
 
-  Future<void> _loadRoundStatus(ApiClient api, String token) async {
+  Future<void> _loadRoundStatus(LobbyRepository lobby, String token) async {
     final desks = ref.read(lobbyPreloadProvider).desks;
     final next = <int, _RoundLive>{};
     var failed = false;
@@ -354,17 +462,15 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
         final id = _asInt(row['id']);
         if (id == null) return;
         try {
-          final json = await api.getJson(
-            '${AppConstants.lastRoundStatusPath}/$id',
-            token: token,
-          );
+          final json = await lobby.lastRoundStatus(id, token);
           final data = json['data'];
           if (data is! Map) return;
           final lastRound = data['lastRound'];
           final status = lastRound is Map
               ? lastRound['status']?.toString()
               : null;
-          next[id] = _RoundLive(
+          next[id] = _roundLive(
+            id,
             status: status,
             seconds: _asInt(data['remaining_seconds']) ?? 0,
           );
@@ -398,7 +504,7 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
 
     final token = await ref.read(secureStorageProvider).getAuthToken();
     if (token != null && token.isNotEmpty) {
-      await _loadRoundStatus(ref.read(apiClientProvider), token);
+      await _loadRoundStatus(ref.read(lobbyRepositoryProvider), token);
       await _loadMemberProfile();
     }
   }
@@ -418,8 +524,8 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
 
     try {
       final response = await ref
-          .read(apiClientProvider)
-          .getJson('/user/profile', token: token);
+          .read(lobbyRepositoryProvider)
+          .getProfile(token);
       final data = response['data'];
       final profile = data is Map ? data['user'] : null;
       if (profile is! Map) {
@@ -551,7 +657,7 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
                           desk: _dashboardData(desk),
                           isTrial: _trial,
                           onEnter: () {
-                            if (desk.baccarat) {
+                            if (desk.opensTableDetail) {
                               unawaited(_openBaccaratDesk(desk.id));
                             } else {
                               showGoldDialog(
@@ -621,6 +727,9 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
       minBet: desk.minBet,
       maxBet: desk.maxBet,
       resultCount: desk.resultCount,
+      shuffling: desk.shuffling,
+      remainingSeconds: desk.remainingSeconds,
+      bettingSeconds: desk.bettingSeconds,
       statistics: List.unmodifiable(statistics),
       markerRoad: calculateMarkerRoad(results),
       bigRoad: calculateBigRoad(results),
@@ -629,6 +738,34 @@ class _LobbyPageState extends ConsumerState<LobbyPage>
       cockroachRoad: calculateCockroachRoad(results),
       secondBigRoad: calculateSecondBigRoad(results),
     );
+  }
+
+  void _rememberRoundClock(
+    int deskId, {
+    required String? status,
+    required int seconds,
+  }) {
+    if (!mounted || deskId <= 0) return;
+    setState(() {
+      _rounds[deskId] = _roundLive(deskId, status: status, seconds: seconds);
+    });
+  }
+
+  _RoundLive _roundLive(
+    int id, {
+    required String? status,
+    required int seconds,
+  }) {
+    final previous = _rounds[id];
+    final betting = status == 'betting' && seconds > 0;
+    final window = !betting
+        ? 0
+        : previous != null &&
+              previous.status == 'betting' &&
+              previous.bettingWindow >= seconds
+        ? previous.bettingWindow
+        : seconds;
+    return _RoundLive(status: status, seconds: seconds, bettingWindow: window);
   }
 }
 
@@ -660,6 +797,9 @@ class _DeskItem {
     required this.results,
     required this.status,
     required this.statusLabel,
+    required this.shuffling,
+    required this.remainingSeconds,
+    required this.bettingSeconds,
   });
 
   final int id;
@@ -674,11 +814,19 @@ class _DeskItem {
   final List<LobbyRoundResult> results;
   final String? status;
   final String statusLabel;
+  final bool shuffling;
+  final int remainingSeconds;
+  final int bettingSeconds;
 
   List<String> get resultKeys =>
       results.map((result) => result.key).toList(growable: false);
 
   bool get baccarat => gameType.toUpperCase() == 'BACCARAT';
+
+  bool get opensTableDetail {
+    final type = gameType.toUpperCase();
+    return type == 'BACCARAT' || type == 'LONGHU';
+  }
 
   int count(String outcome) =>
       resultKeys.where((key) => key.split('|').contains(outcome)).length;
@@ -755,6 +903,9 @@ List<_DeskItem> _desks(
         results: List.unmodifiable(roundResults),
         status: status,
         statusLabel: _statusLabel(status, live?.seconds ?? 0),
+        shuffling: deskIsShuffling(row),
+        remainingSeconds: status == 'betting' ? (live?.seconds ?? 0) : 0,
+        bettingSeconds: status == 'betting' ? (live?.bettingWindow ?? 0) : 0,
       ),
     );
   }
@@ -778,10 +929,17 @@ String _statusLabel(String? status, int seconds) {
 }
 
 class _RoundLive {
-  const _RoundLive({required this.status, required this.seconds});
+  const _RoundLive({
+    required this.status,
+    required this.seconds,
+    required this.bettingWindow,
+  });
 
   final String? status;
   final int seconds;
+
+  /// Longest remaining time seen for the current betting round.
+  final int bettingWindow;
 }
 
 int? _asInt(Object? value) {

@@ -6,7 +6,7 @@ import '../../features/auth/agreement_page.dart';
 import '../../features/auth/login_page.dart';
 import '../../features/auth/session_pages.dart';
 import '../../features/loading/loading_page.dart';
-import '../../features/game_detail/baccarat_game_detail_page.dart';
+import '../../features/game_detail/game_table_detail_page.dart';
 import '../../features/lobby/lobby_page.dart';
 import '../../features/settings/settings_page.dart';
 
@@ -54,7 +54,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '${AppRoutes.baccaratDetail}/:deskId',
         name: 'baccaratDetail',
-        builder: (context, state) => BaccaratGameDetailPage(
+        builder: (context, state) => GameTableDetailPage(
           deskId: int.tryParse(state.pathParameters['deskId'] ?? '') ?? 0,
         ),
       ),

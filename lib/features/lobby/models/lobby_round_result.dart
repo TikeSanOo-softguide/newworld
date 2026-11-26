@@ -4,12 +4,17 @@ class LobbyRoundResult {
     required this.roundId,
     required this.key,
     this.roundNo,
+    this.netAmounts = const {},
   });
 
   final int deskId;
   final int roundId;
   final String key;
   final int? roundNo;
+
+  /// `user_id` to `net_amount` from a socket result. HTTP history has none.
+  /// This is not written into [toApiJson].
+  final Map<int, num> netAmounts;
 
   factory LobbyRoundResult.fromApi(int deskId, Object? value) {
     if (value is! Map) {
@@ -39,7 +44,12 @@ class LobbyRoundResult {
         'Socket result is missing round_id or result',
       );
     }
-    return LobbyRoundResult(deskId: deskId, roundId: roundId, key: result);
+    return LobbyRoundResult(
+      deskId: deskId,
+      roundId: roundId,
+      key: result,
+      netAmounts: _netAmounts(value['userNetAmounts']),
+    );
   }
 
   Map<String, Object?> toApiJson() => {
@@ -60,6 +70,19 @@ List<LobbyRoundResult> mergeLobbyRoundResults(
   final merged = byRoundId.values.toList()
     ..sort((a, b) => a.roundId.compareTo(b.roundId));
   return List.unmodifiable(merged);
+}
+
+Map<int, num> _netAmounts(Object? value) {
+  if (value is! List) return const {};
+  final amounts = <int, num>{};
+  for (final row in value) {
+    if (row is! Map) continue;
+    final userId = _asInt(row['user_id']);
+    final net = row['net_amount'];
+    if (userId == null || net is! num) continue;
+    amounts[userId] = net;
+  }
+  return Map.unmodifiable(amounts);
 }
 
 int? _asInt(Object? value) {

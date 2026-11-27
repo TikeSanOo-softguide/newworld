@@ -6,6 +6,7 @@ import '../../lobby/roadmap/roadmap_calculations.dart';
 import '../../lobby/roadmap/roadmap_models.dart';
 import '../../lobby/roadmap/roadmap_painter.dart';
 import '../../lobby/widgets/lobby_dashboard_widgets.dart';
+import 'cross_desk_result_overlay.dart';
 
 /// Reference frame is 600px wide and the list starts at x=94.
 const tableSwitchPanelWidthFactor = 506 / 600;
@@ -137,6 +138,7 @@ class TableSwitchPanel extends StatefulWidget {
     required this.trial,
     required this.clockFor,
     required this.onSelect,
+    this.confirmedBetAmountByDesk = const {},
   });
 
   final List<Map<String, dynamic>> desks;
@@ -145,6 +147,9 @@ class TableSwitchPanel extends StatefulWidget {
   final bool trial;
   final DeskListClock? Function(int deskId) clockFor;
   final ValueChanged<Map<String, dynamic>> onSelect;
+
+  /// Confirmed stake totals. A value above zero draws the ¥ mark.
+  final Map<int, num> confirmedBetAmountByDesk;
 
   @override
   State<TableSwitchPanel> createState() => _TableSwitchPanelState();
@@ -191,6 +196,8 @@ class _TableSwitchPanelState extends State<TableSwitchPanel> {
                           current: id == widget.currentDeskId,
                           trial: widget.trial,
                           clock: widget.clockFor(id),
+                          hasConfirmedBet:
+                              (widget.confirmedBetAmountByDesk[id] ?? 0) > 0,
                           onTap: () => widget.onSelect(desk),
                         );
                       },
@@ -310,6 +317,7 @@ class _DeskSwitchCard extends StatelessWidget {
     required this.current,
     required this.trial,
     required this.clock,
+    required this.hasConfirmedBet,
     required this.onTap,
   });
 
@@ -317,6 +325,7 @@ class _DeskSwitchCard extends StatelessWidget {
   final bool current;
   final bool trial;
   final DeskListClock? clock;
+  final bool hasConfirmedBet;
   final VoidCallback onTap;
 
   @override
@@ -354,16 +363,29 @@ class _DeskSwitchCard extends StatelessWidget {
                     children: [
                       Expanded(
                         flex: 5,
-                        child: Text(
-                          _listTitle(desk),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: const Color(0xFFD5D5D5),
-                            fontSize: fontSize,
-                            fontWeight: FontWeight.w600,
-                            height: 1,
-                          ),
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                _listTitle(desk),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: const Color(0xFFD5D5D5),
+                                  fontSize: fontSize,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1,
+                                ),
+                              ),
+                            ),
+                            if (hasConfirmedBet) ...[
+                              SizedBox(width: fontSize * 0.35),
+                              DeskConfirmedBetMark(
+                                key: ValueKey('desk-bet-mark-$id'),
+                                size: (headerHeight * 0.55).clamp(12.0, 16.0),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                       for (final stat in _statistics(results, longhu: longhu))
@@ -385,19 +407,18 @@ class _DeskSwitchCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (progress != null)
-                  SizedBox(
-                    key: ValueKey('desk-progress-$id'),
-                    height: barHeight,
-                    child: ColoredBox(
-                      color: const Color(0xFF2B4863),
-                      child: FractionallySizedBox(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: progress,
-                        child: const ColoredBox(color: Color(0xFF00FC97)),
-                      ),
+                SizedBox(
+                  key: ValueKey('desk-progress-$id'),
+                  height: barHeight,
+                  child: ColoredBox(
+                    color: const Color(0xFF2B4863),
+                    child: FractionallySizedBox(
+                      alignment: Alignment.centerLeft,
+                      widthFactor: progress ?? 0,
+                      child: const ColoredBox(color: Color(0xFF00FC97)),
                     ),
                   ),
+                ),
                 _SwitchRoadPreview(
                   roadmap: roadmap,
                   shuffling: shuffling,

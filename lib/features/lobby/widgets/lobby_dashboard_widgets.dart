@@ -436,11 +436,10 @@ class LobbyGameTableSection extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (_showsBettingProgress(desk))
-                  _BettingProgressBar(
-                    progress: desk.remainingSeconds / desk.bettingSeconds,
-                    height: (beadCellWidth * 0.16).clamp(3.0, 7.0),
-                  ),
+                _BettingProgressBar(
+                  progress: _bettingFill(desk),
+                  height: (beadCellWidth * 0.16).clamp(3.0, 7.0),
+                ),
                 Padding(
                   padding: const EdgeInsets.only(right: 3),
                   child: Stack(
@@ -612,11 +611,14 @@ class _ShufflingLabel extends StatelessWidget {
 
 const _trialStampColor = Color(0xF2C44746);
 
-bool _showsBettingProgress(LobbyDeskDashboardData desk) {
-  return !desk.shuffling &&
-      desk.status == 'betting' &&
-      desk.bettingSeconds > 0 &&
-      desk.remainingSeconds > 0;
+double _bettingFill(LobbyDeskDashboardData desk) {
+  if (desk.shuffling ||
+      desk.status != 'betting' ||
+      desk.bettingSeconds <= 0 ||
+      desk.remainingSeconds <= 0) {
+    return 0;
+  }
+  return (desk.remainingSeconds / desk.bettingSeconds).clamp(0.0, 1.0);
 }
 
 class _BettingProgressBar extends StatelessWidget {

@@ -18,6 +18,7 @@ import '../lobby/models/lobby_round_result.dart';
 import '../lobby/realtime/desk_betting_clock.dart';
 import '../lobby/realtime/live_table_events.dart';
 import '../lobby/realtime/lobby_socket_service.dart';
+import 'desk_result_indicators.dart';
 import 'detail_status_notice.dart';
 import 'detail_sync_buffer.dart';
 import 'detail_amount_format.dart';
@@ -37,6 +38,7 @@ import 'voice_announcement.dart';
 import 'voice_playback.dart';
 import 'widgets/baccarat_betting_panel.dart';
 import 'widgets/baccarat_roadmap_panel.dart';
+import 'widgets/cross_desk_result_overlay.dart';
 import 'widgets/table_switch_panel.dart';
 import 'widgets/baccarat_video_panel.dart';
 
@@ -118,7 +120,13 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
   final DetailStatusPhrases _phrases = DetailStatusPhrases();
   String? _statusPhrase;
   Timer? _statusPhraseTimer;
-  String? _badgeText;
+  RoundResultPill? _roundPill;
+  final DeskConfirmedStakeBook _stakeBook = DeskConfirmedStakeBook();
+  late final CrossDeskAnnouncements _crossDesk = CrossDeskAnnouncements(
+    onChanged: () {
+      if (mounted) setState(() {});
+    },
+  );
   bool _limitsOpen = false;
   bool _loading = true;
   bool _loadingBets = false;
@@ -190,6 +198,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
   void dispose() {
     if (_orientation.landscape) unawaited(_orientation.restorePortrait());
     _statusPhraseTimer?.cancel();
+    _crossDesk.dispose();
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_resultSubscription?.cancel());
     unawaited(_statusSubscription?.cancel());
@@ -316,7 +325,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
           _clearStagedBets();
           _submittingResultId = null;
           _betsLoaded = false;
-          _badgeText = null;
+          _roundPill = null;
           _cameraMenuOpen = false;
           _cameraView = DeskCameraView.fullTable;
           _videoFullscreen = false;
@@ -345,7 +354,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
           _rememberCurrentStake(roundId: previousRoundId);
           _confirmedBets = _emptyBets;
           _poolTotals = BaccaratPoolTotals.empty;
-          _badgeText = null;
+          _roundPill = null;
         }
         if (phrase != null) _statusPhrase = phrase;
         if (previousRoundId != null && previousRoundId != desk.lastRoundId) {
@@ -432,32 +441,58 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
   }) async {
     final activeGeneration = generation ?? _syncGate.newest;
     if (!mounted || !_syncGate.isCurrent(activeGeneration)) return;
+    final deskId = _deskId;
+    final ticket = _stakeBook.open(deskId);
+    var stakeSettled = false;
+    void keepStake(num amount) {
+      if (stakeSettled) return;
+      stakeSettled = true;
+      _stakeBook.apply(deskId, amount, ticket);
+    }
+
+    void dropStake() {
+      if (stakeSettled) return;
+      stakeSettled = true;
+      _stakeBook.abandon(deskId, ticket);
+    }
+
     setState(() => _loadingBets = true);
     try {
       final confirmed = await _repository.getConfirmedBets(roundId, token);
-      if (!mounted || !_syncGate.isCurrent(activeGeneration)) return;
+      if (!mounted || !_syncGate.isCurrent(activeGeneration)) {
+        dropStake();
+        return;
+      }
       setState(() {
-        _confirmedBets = confirmed;
-        _betsLoaded = true;
-        _betsError = null;
+        if (_deskId == deskId) {
+          _confirmedBets = confirmed;
+          _betsLoaded = true;
+          _betsError = null;
+        }
+        keepStake(confirmed.totalAmount);
       });
-      _rememberCurrentStake();
+      if (_deskId == deskId) _rememberCurrentStake();
     } on ApiException catch (error) {
+      dropStake();
       if (_syncGate.isCurrent(activeGeneration) &&
           !await _handleAuthError(error) &&
-          mounted) {
+          mounted &&
+          _deskId == deskId) {
         setState(() => _betsError = error.message);
       }
     } on FormatException catch (error) {
-      if (mounted && _syncGate.isCurrent(activeGeneration)) {
+      dropStake();
+      if (mounted && _syncGate.isCurrent(activeGeneration) && _deskId == deskId) {
         setState(() => _betsError = error.message);
       }
     } on TimeoutException {
-      if (mounted && _syncGate.isCurrent(activeGeneration)) {
+      dropStake();
+      if (mounted && _syncGate.isCurrent(activeGeneration) && _deskId == deskId) {
         setState(() => _betsError = '读取本局投注超时');
       }
     } on http.ClientException {
-      if (mounted && _syncGate.isCurrent(activeGeneration)) {
+      dropStake();
+      if (mounted && _syncGate.isCurrent(activeGeneration) && _deskId == deskId) {
         setState(() => _betsError = '无法读取本局投注');
       }
     } finally {
@@ -520,6 +555,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
     if (!mounted) return;
     if (result.deskId != _deskId) {
       ref.read(lobbyPreloadProvider.notifier).upsertResult(result);
+      _announceOtherDesk(result);
       return;
     }
     if (_holdLiveEvents) {
@@ -529,8 +565,43 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
     _applyOpenDeskResult(result);
   }
 
+  /// A result that arrived for some other desk. The open desk's badge is
+  /// left alone. The same desk and round cannot announce twice.
+  void _announceOtherDesk(LobbyRoundResult result) {
+    _crossDesk.accept(
+      deskId: result.deskId,
+      roundId: result.roundId,
+      viewedDeskIds: {_deskId},
+      memberId: _memberUserId,
+      netAmounts: result.netAmounts,
+      label: _crossDeskLabel(result.deskId),
+    );
+  }
+
+  String _crossDeskLabel(int deskId) {
+    final snapshot = ref.read(lobbyPreloadProvider);
+    for (final desk in snapshot.desks) {
+      if (_asInt(desk['id']) == deskId) return formatCrossDeskDeskLabel(desk);
+    }
+    final open = _desk;
+    if (open != null && open.id == deskId) {
+      return formatCrossDeskDeskLabel({
+        'name': open.name,
+        'game': {'name': open.gameName},
+      });
+    }
+    return '台';
+  }
+
   void _applyOpenDeskResult(LobbyRoundResult result) {
     if (!mounted) return;
+    // A result buffered for the desk we just left must not speak, merge, or
+    // badge as the desk that is open now. It also must not become a
+    // cross-desk notice: it arrived while that desk was the one on screen.
+    if (result.deskId != _deskId) {
+      ref.read(lobbyPreloadProvider.notifier).upsertResult(result);
+      return;
+    }
     final gameType = _desk?.gameType;
     if (gameType != null) {
       _playVoice(
@@ -553,16 +624,17 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
     }
     final current = _desk?.results ?? const <LobbyRoundResult>[];
     final merged = reconcileResults(base: current, incoming: [result]);
-    if (identical(merged, current)) {
-      _onSettlementResult(result);
-      return;
-    }
     final badge = memberRoundBadge(
       resultKey: result.key,
       memberId: _memberUserId,
       netAmounts: result.netAmounts,
       longhu: _gameProfile.longhu,
     );
+    if (identical(merged, current)) {
+      if (badge != null) setState(() => _roundPill = badge);
+      _onSettlementResult(result);
+      return;
+    }
     ref.read(lobbyPreloadProvider.notifier).upsertResult(result);
     if (result.deskId != _deskId) return;
     setState(() {
@@ -586,7 +658,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
           deskResultRateLimits: _desk!.deskResultRateLimits,
           results: merged,
         );
-        _badgeText = badge;
+        _roundPill = badge;
       }
     });
     _onSettlementResult(result);
@@ -872,6 +944,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
 
   void _onDeskUpdate(LobbyDeskUpdate update) {
     if (!mounted) return;
+    _clearStakeMarkOnDeskSignal(update);
     if (update.deskId != _deskId) {
       _rememberPanelClock(update);
       if (_tablePanelOpen) setState(() {});
@@ -938,7 +1011,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
           remainingSeconds: next.remainingSeconds,
         );
         if (phrase != null) _statusPhrase = phrase;
-        if (update.status == 'betting') _badgeText = null;
+        if (update.status == 'betting') _roundPill = null;
       });
       if (update.status == 'finished') {
         final roundId = _desk?.lastRoundId;
@@ -1081,9 +1154,57 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
     _refreshingLiveData = true;
     try {
       await _loadDetail(showLoading: false);
+      await _refreshOtherStakeMarks();
     } finally {
       _refreshingLiveData = false;
     }
+  }
+
+  /// Re-reads confirmed stakes for desks that are not on screen.
+  ///
+  /// The open desk is already loaded by [_loadDetail]. A missed betting-start
+  /// or shoe end while the socket was down is replaced by the server total.
+  /// A failed read leaves the mark that was already accepted.
+  Future<void> _refreshOtherStakeMarks() async {
+    final token = _token;
+    if (token == null || !mounted) return;
+    final deskIds = List<int>.of(_stakeBook.amounts.keys);
+    for (final deskId in deskIds) {
+      if (!mounted || deskId == _deskId) continue;
+      final roundId = _roundIdForDesk(deskId);
+      final ticket = _stakeBook.open(deskId);
+      if (roundId == null) {
+        setState(() => _stakeBook.apply(deskId, 0, ticket));
+        continue;
+      }
+      try {
+        final confirmed = await _repository.getConfirmedBets(roundId, token);
+        if (!mounted) return;
+        setState(() => _stakeBook.apply(deskId, confirmed.totalAmount, ticket));
+      } catch (_) {
+        _stakeBook.abandon(deskId, ticket);
+      }
+    }
+  }
+
+  int? _roundIdForDesk(int deskId) {
+    if (deskId == _deskId) return _desk?.lastRoundId;
+    final snapshot = ref.read(lobbyPreloadProvider);
+    for (final desk in snapshot.desks) {
+      if (_asInt(desk['id']) != deskId) continue;
+      final round = desk['last_round'];
+      if (round is Map) return _asInt(round['id']);
+    }
+    return null;
+  }
+
+  void _clearStakeMarkOnDeskSignal(LobbyDeskUpdate update) {
+    final bettingStarted =
+        update is LobbyDeskStatusUpdate && update.status == 'betting';
+    final shoeFinished = update is LobbyDeskSessionFinished;
+    if (!bettingStarted && !shoeFinished) return;
+    final removed = _stakeBook.clear(update.deskId);
+    if (removed && mounted) setState(() {});
   }
 
   Future<void> _setRoom(String room) async {
@@ -1349,6 +1470,20 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
     }
 
     final deskId = _deskId;
+    final stakeTicket = _stakeBook.open(deskId);
+    var stakeSettled = false;
+    void keepStake(num amount) {
+      if (stakeSettled) return;
+      stakeSettled = true;
+      _stakeBook.apply(deskId, amount, stakeTicket);
+    }
+
+    void dropStake() {
+      if (stakeSettled) return;
+      stakeSettled = true;
+      _stakeBook.abandon(deskId, stakeTicket);
+    }
+
     bool responseMatchesOpenTable() =>
         mounted && _deskId == deskId && _desk?.lastRoundId == lastRoundId;
     void noteUnappliedResponse() {
@@ -1383,7 +1518,12 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
         token: token,
         csrfToken: _csrfToken ?? '',
       );
+      if (!mounted) {
+        dropStake();
+        return;
+      }
       if (!responseMatchesOpenTable()) {
+        setState(() => keepStake(result.totalBetAmount));
         noteUnappliedResponse();
         return;
       }
@@ -1399,6 +1539,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
           _profileReadsInFlight == 0;
       setState(() {
         if (!roundAlreadySettled) _confirmedBets = result.confirmedBets;
+        keepStake(result.totalBetAmount);
         _rememberCurrentStake();
         if (applyRemaining) {
           _balance = result.remainingBalance;
@@ -1419,6 +1560,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
       );
       _showMessage('下注成功');
     } on ApiException catch (error) {
+      dropStake();
       if (!mounted) return;
       if (await _handleAuthError(error)) return;
       if (responseMatchesOpenTable()) {
@@ -1427,24 +1569,28 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
         noteUnappliedResponse();
       }
     } on BaccaratActionException catch (error) {
+      dropStake();
       if (responseMatchesOpenTable()) {
         _showMessage(error.message);
       } else {
         noteUnappliedResponse();
       }
     } on FormatException catch (error) {
+      dropStake();
       if (responseMatchesOpenTable()) {
         _showMessage(error.message);
       } else {
         noteUnappliedResponse();
       }
     } on TimeoutException {
+      dropStake();
       if (responseMatchesOpenTable()) {
         _showMessage('下注请求超时，请刷新确认投注状态');
       } else {
         noteUnappliedResponse();
       }
     } on http.ClientException {
+      dropStake();
       if (responseMatchesOpenTable()) {
         _showMessage('无法连接服务器，请刷新确认投注状态');
       } else {
@@ -1595,6 +1741,21 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
     final token = _token;
     final roundId = desk?.lastRoundId;
     if (!_canCancel || desk == null || token == null || roundId == null) return;
+    final deskId = desk.id;
+    final stakeTicket = _stakeBook.open(deskId);
+    var stakeSettled = false;
+    void keepStake(num amount) {
+      if (stakeSettled) return;
+      stakeSettled = true;
+      _stakeBook.apply(deskId, amount, stakeTicket);
+    }
+
+    void dropStake() {
+      if (stakeSettled) return;
+      stakeSettled = true;
+      _stakeBook.abandon(deskId, stakeTicket);
+    }
+
     setState(() => _canceling = true);
     try {
       await _repository.cancelBets(
@@ -1617,36 +1778,52 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
       } finally {
         _profileReadsInFlight--;
       }
-      if (!mounted) return;
+      if (!mounted) {
+        dropStake();
+        return;
+      }
       final applyBalance =
           profileRead == _profileRead &&
           balanceRevisionAtCancel == _balanceRevision;
+      final stillThisDesk = _deskId == deskId && _desk?.lastRoundId == roundId;
       setState(() {
-        _confirmedBets = confirmed;
-        _rememberCurrentStake();
-        if (confirmed.totalAmount <= 0) _forgetOpenStake(roundId);
-        if (applyBalance) {
-          _balance = profile.balance;
-          _balanceRevision++;
+        keepStake(confirmed.totalAmount);
+        if (stillThisDesk) {
+          _confirmedBets = confirmed;
+          _rememberCurrentStake();
+          if (confirmed.totalAmount <= 0) _forgetOpenStake(roundId);
+          if (applyBalance) {
+            _balance = profile.balance;
+            _balanceRevision++;
+          }
+          _memberLimits = profile.resultRateLimits;
         }
-        _memberLimits = profile.resultRateLimits;
       });
-      if (applyBalance) await _storage.setBalance(_balance.toString());
-      _traceBalance(
-        applyBalance ? 'cancel applied profile' : 'cancel kept newer balance',
-        roundId: roundId,
-        next: profile.balance,
-      );
-      _showMessage('成功取消下注');
+      if (stillThisDesk && applyBalance) {
+        await _storage.setBalance(_balance.toString());
+      }
+      if (stillThisDesk) {
+        _traceBalance(
+          applyBalance ? 'cancel applied profile' : 'cancel kept newer balance',
+          roundId: roundId,
+          next: profile.balance,
+        );
+        _showMessage('成功取消下注');
+      }
     } on ApiException catch (error) {
+      dropStake();
       if (!await _handleAuthError(error)) _showMessage(error.message);
     } on BaccaratActionException catch (error) {
+      dropStake();
       _showMessage(error.message);
     } on FormatException catch (error) {
+      dropStake();
       _showMessage(error.message);
     } on TimeoutException {
+      dropStake();
       _showMessage('取消投注请求超时，请刷新确认投注状态');
     } on http.ClientException {
+      dropStake();
       _showMessage('无法连接服务器，请刷新确认投注状态');
     } finally {
       if (mounted) setState(() => _canceling = false);
@@ -1757,24 +1934,31 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
   void _selectCameraOption(String label) {
     final view = cameraViewForLabel(label);
     if (view == null) return;
-    setState(() {
-      if (view == DeskCameraView.fullscreen) {
-        _videoFullscreen = !_videoFullscreen;
-        return;
-      }
-      _cameraView = view;
-    });
+    if (view == DeskCameraView.fullscreen) {
+      unawaited(_enterLandscapeVideo());
+      return;
+    }
+    setState(() => _cameraView = view);
   }
 
   Future<void> _enterLandscapeVideo() async {
-    if (!_videoFullscreen || _landscapeVideo) return;
-    setState(() => _landscapeVideo = true);
+    if (_landscapeVideo) return;
+    setState(() {
+      _landscapeVideo = true;
+      _videoFullscreen = false;
+      _cameraMenuOpen = false;
+    });
     await _orientation.enterLandscape();
   }
 
   Future<void> _exitLandscapeVideo() async {
-    if (mounted && _landscapeVideo) {
-      setState(() => _landscapeVideo = false);
+    final leaving = _landscapeVideo || _orientation.landscape;
+    if (mounted && leaving) {
+      setState(() {
+        _landscapeVideo = false;
+        _videoFullscreen = false;
+        _cameraMenuOpen = false;
+      });
     }
     if (_orientation.landscape) await _orientation.restorePortrait();
   }
@@ -1863,10 +2047,15 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
       onSelectCameraOption: _selectCameraOption,
       cameraSurfaceKey: _cameraSurfaceKey,
       landscape: _landscapeVideo,
-      onVideoTap: _videoFullscreen && !_landscapeVideo
-          ? () => unawaited(_enterLandscapeVideo())
-          : null,
-      onExitLandscape: () => unawaited(_exitLandscapeVideo()),
+      trialStamp: _roadStamp(),
+      trialStampColor: _roadStampColor(),
+      statusText: _statusPhrase,
+      badgeText: _roundPill?.outcome,
+      badgeDetail: _roundPill?.detail,
+      badgeDetailIsNote: _roundPill?.detailIsNote ?? false,
+      onVideoTap: () => unawaited(
+        _landscapeVideo ? _exitLandscapeVideo() : _enterLandscapeVideo(),
+      ),
       onBack: () {
         if (_landscapeVideo) {
           unawaited(_exitLandscapeVideo());
@@ -1973,7 +2162,9 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
                                     BaccaratBettingPanel(
                                       deskId: desk.id,
                                       longhu: _gameProfile.longhu,
-                                      cards: _cardSnapshot,
+                                      cards: _switchingDeskId == null
+                                          ? _cardSnapshot
+                                          : null,
                                       options: _options,
                                       confirmedBets: _confirmedBets.byResultKey,
                                       confirmedTotalAmount:
@@ -2016,12 +2207,18 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
                                           unawaited(_showBettingHistory()),
                                       onCustomerService: () =>
                                           unawaited(_showCustomerServiceInfo()),
+                                      boardBanner: _crossDesk.current == null
+                                          ? null
+                                          : CrossDeskResultBar(
+                                              content:
+                                                  _crossDesk.current!.content,
+                                            ),
                                     ),
-                                    if (_badgeText != null)
+                                    if (_roundPill != null)
                                       Positioned.fill(
                                         child: IgnorePointer(
                                           child: Center(
-                                            child: _WinBadge(text: _badgeText!),
+                                            child: _WinBadge(pill: _roundPill!),
                                           ),
                                         ),
                                       ),
@@ -2075,6 +2272,9 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
                     initialType: _gameProfile.gameType,
                     trial: _trial,
                     clockFor: _clockForDesk,
+                    confirmedBetAmountByDesk: Map<int, num>.of(
+                      _stakeBook.amounts,
+                    ),
                     onSelect: (desk) => unawaited(_selectDesk(desk)),
                   ),
                 ),
@@ -2148,6 +2348,7 @@ class _GameTableDetailPageState extends ConsumerState<GameTableDetailPage>
 
   void _playVoice(VoiceCue? cue) {
     if (cue == null) return;
+    debugPrint('[Voice] cue ${cue.asset}');
     unawaited(_voicePlayback.play(cue));
   }
 
@@ -2257,26 +2458,45 @@ class _MessageBanner extends StatelessWidget {
 const _emptyBets = BaccaratConfirmedBets(byResultKey: {}, totalAmount: 0);
 
 class _WinBadge extends StatelessWidget {
-  const _WinBadge({required this.text});
+  const _WinBadge({required this.pill});
 
-  final String text;
+  final RoundResultPill pill;
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
+      key: const ValueKey('current-desk-result-pill'),
       decoration: BoxDecoration(
         color: const Color(0xE6222222),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Text(
-          text,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 22,
-            fontWeight: FontWeight.w700,
-          ),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              pill.outcome,
+              style: const TextStyle(
+                color: crossDeskDeskInk,
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                height: 1.1,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              pill.detail,
+              style: TextStyle(
+                color: pill.detailIsNote
+                    ? crossDeskZeroInk
+                    : crossDeskDeskInk,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                height: 1.1,
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -1,22 +1,49 @@
-/// Badge text from this member's `userNetAmounts.net_amount`.
+/// Two-line result pill for the open desk.
 ///
-/// The noun is the main result token. The amount is not calculated here.
-/// A loss keeps the minus sign. The recordings show wins only, so a loss
-/// does not add an unverified verb.
-String? memberRoundBadge({
+/// The first line is the round outcome. The second line is this member's
+/// net when they are in `userNetAmounts`, including zero. Absence means
+/// they had no bet on the round.
+class RoundResultPill {
+  const RoundResultPill({
+    required this.outcome,
+    required this.detail,
+    required this.detailIsNote,
+  });
+
+  final String outcome;
+  final String detail;
+
+  /// `本局未下注` is white. A numeric net is green.
+  final bool detailIsNote;
+}
+
+const currentRoundNoBetNote = '本局未下注';
+
+/// Outcome from the result key, then this member's net or [currentRoundNoBetNote].
+///
+/// A missing member id cannot tell absence from a not-yet-loaded profile,
+/// so the pill waits. A present net of zero is shown as `0`.
+RoundResultPill? memberRoundBadge({
   required String resultKey,
   required int? memberId,
   required Map<int, num> netAmounts,
   required bool longhu,
 }) {
-  if (memberId == null || !netAmounts.containsKey(memberId)) return null;
-  final net = netAmounts[memberId]!;
-  if (net == 0) return null;
   final noun = _mainNoun(resultKey, longhu: longhu);
-  if (noun == null) return null;
-  final amount = _amount(net);
-  if (net > 0 && noun != '和') return '$noun赢 $amount';
-  return '$noun $amount';
+  if (noun == null || memberId == null) return null;
+  final outcome = noun == '和' ? noun : '$noun赢';
+  if (!netAmounts.containsKey(memberId)) {
+    return RoundResultPill(
+      outcome: outcome,
+      detail: currentRoundNoBetNote,
+      detailIsNote: true,
+    );
+  }
+  return RoundResultPill(
+    outcome: outcome,
+    detail: _amount(netAmounts[memberId]!),
+    detailIsNote: false,
+  );
 }
 
 String? _mainNoun(String resultKey, {required bool longhu}) {

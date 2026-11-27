@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../camera_playback.dart';
+import '../detail_status_notice.dart';
 import '../whep_playback.dart';
 import 'camera_surface.dart';
 
@@ -33,8 +34,13 @@ class BaccaratVideoPanel extends StatefulWidget {
     this.limitLines = const [],
     this.onVideoTap,
     this.landscape = false,
-    this.onExitLandscape,
     this.cameraSurfaceKey,
+    this.trialStamp,
+    this.trialStampColor = const Color(0xE6E02028),
+    this.statusText,
+    this.badgeText,
+    this.badgeDetail,
+    this.badgeDetailIsNote = false,
   });
 
   final String deskName;
@@ -61,13 +67,28 @@ class BaccaratVideoPanel extends StatefulWidget {
   final bool limitsOpen;
   final List<String> limitLines;
 
-  /// Set only while the existing portrait 全屏 mode is showing.
+  /// Tap on the picture. Portrait enters landscape; landscape returns.
   final VoidCallback? onVideoTap;
 
   /// Device landscape. The same [CameraSurface] key keeps the player.
   final bool landscape;
-  final VoidCallback? onExitLandscape;
   final Key? cameraSurfaceKey;
+
+  /// Trial stamp already decided by the page. Empty for a normal account.
+  final String? trialStamp;
+  final Color trialStampColor;
+
+  /// The page's current status phrase, shared with the portrait roadmap.
+  final String? statusText;
+
+  /// The page's current round outcome, shared with the portrait pill.
+  final String? badgeText;
+
+  /// Second line of that pill. Empty when [badgeText] is a single-line host.
+  final String? badgeDetail;
+
+  /// White second line. A numeric net stays green.
+  final bool badgeDetailIsNote;
 
   @override
   State<BaccaratVideoPanel> createState() => _BaccaratVideoPanelState();
@@ -110,7 +131,7 @@ class _BaccaratVideoPanelState extends State<BaccaratVideoPanel> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.landscape) return _landscapeVideo(context);
+    if (widget.landscape) return _landscapeVideo();
     final statusLine = _playbackStatus;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -342,36 +363,180 @@ class _BaccaratVideoPanelState extends State<BaccaratVideoPanel> {
     );
   }
 
-  /// Landscape shows the current picture and a way back to portrait 全屏.
-  Widget _landscapeVideo(BuildContext context) {
-    final padding = MediaQuery.paddingOf(context);
+  /// The current picture, plus the page's trial stamp and status phrase.
+  /// A tap anywhere on the picture returns to the betting page.
+  Widget _landscapeVideo() {
+    final stamp = widget.trialStamp;
+    final phrase = widget.statusText;
+    final badge = widget.badgeText;
     return ColoredBox(
       color: Colors.black,
       child: Stack(
         fit: StackFit.expand,
         children: [
           _videoPicture(),
-          Positioned(
-            top: padding.top + 8,
-            left: padding.left + 8,
-            child: _RailTap(
-              label: '退出全屏',
-              onPressed: widget.onExitLandscape ?? () {},
-              child: const DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Color(0xCC000000),
-                  borderRadius: BorderRadius.all(Radius.circular(8)),
-                ),
-                child: SizedBox(
-                  key: ValueKey('exit-landscape-video'),
-                  width: 44,
-                  height: 36,
-                  child: CustomPaint(painter: _ReturnArrowPainter()),
+          if (stamp != null && stamp.isNotEmpty)
+            Align(
+              alignment: const Alignment(0, 0.58),
+              child: IgnorePointer(
+                child: _LandscapeTrialStamp(
+                  stamp: stamp,
+                  color: widget.trialStampColor,
                 ),
               ),
             ),
-          ),
+          if (badge != null && badge.isNotEmpty)
+            Align(
+              alignment: const Alignment(0, 0.28),
+              child: IgnorePointer(
+                child: _LandscapeRoundBadge(
+                  text: badge,
+                  detail: widget.badgeDetail,
+                  detailIsNote: widget.badgeDetailIsNote,
+                ),
+              ),
+            ),
+          if (phrase != null && phrase.isNotEmpty)
+            Align(
+              alignment: const Alignment(0, 0.72),
+              child: IgnorePointer(child: _LandscapeStatusNotice(text: phrase)),
+            ),
+          if (widget.onVideoTap != null)
+            Positioned.fill(
+              child: GestureDetector(
+                key: const ValueKey('video-landscape-tap'),
+                behavior: HitTestBehavior.opaque,
+                onTap: widget.onVideoTap,
+              ),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// Same red tilted stamp the portrait roadmap draws for a trial account.
+class _LandscapeTrialStamp extends StatelessWidget {
+  const _LandscapeTrialStamp({required this.stamp, required this.color});
+
+  final String stamp;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final fontSize = (MediaQuery.sizeOf(context).shortestSide * 0.09).clamp(
+      22.0,
+      40.0,
+    );
+    return Transform.rotate(
+      angle: -0.26,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: fontSize * 0.45,
+          vertical: fontSize * 0.08,
+        ),
+        decoration: BoxDecoration(border: Border.all(color: color, width: 1.5)),
+        child: Text(
+          stamp,
+          style: TextStyle(
+            color: color,
+            fontSize: fontSize,
+            fontWeight: FontWeight.w500,
+            height: 1,
+            letterSpacing: 2,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The portrait roadmap phrase, drawn across the landscape picture.
+class _LandscapeStatusNotice extends StatelessWidget {
+  const _LandscapeStatusNotice({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final fontSize = (MediaQuery.sizeOf(context).shortestSide * 0.07).clamp(
+      18.0,
+      32.0,
+    );
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0x80333333),
+        borderRadius: detailRepeatNotice(text)
+            ? BorderRadius.circular(4)
+            : null,
+      ),
+      child: SizedBox(
+        width: double.infinity,
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: fontSize * 0.35),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: detailStatusPhraseInk(text),
+              fontSize: fontSize,
+              fontWeight: FontWeight.w700,
+              height: 1.1,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Same dark result pill the portrait board draws for the round badge.
+class _LandscapeRoundBadge extends StatelessWidget {
+  const _LandscapeRoundBadge({
+    required this.text,
+    this.detail,
+    this.detailIsNote = false,
+  });
+
+  final String text;
+  final String? detail;
+  final bool detailIsNote;
+
+  @override
+  Widget build(BuildContext context) {
+    final line = TextStyle(
+      color: const Color(0xFF3DDC6A),
+      fontSize: 22,
+      fontWeight: FontWeight.w800,
+      height: 1.1,
+    );
+    final second = detail;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xE6222222),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: second == null || second.isEmpty
+            ? Text(text, style: line)
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(text, style: line),
+                  const SizedBox(height: 2),
+                  Text(
+                    second,
+                    style: line.copyWith(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: detailIsNote
+                          ? const Color(0xFFFFFFFF)
+                          : const Color(0xFF3DDC6A),
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }

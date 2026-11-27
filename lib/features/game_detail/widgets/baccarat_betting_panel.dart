@@ -37,6 +37,7 @@ class BaccaratBettingPanel extends StatelessWidget {
     this.deskId = 0,
     this.cards,
     this.cardRevealAfter = cardRevealDelay,
+    this.boardBanner,
   });
 
   final List<BaccaratResultOption> options;
@@ -70,6 +71,9 @@ class BaccaratBettingPanel extends StatelessWidget {
   final int deskId;
   final DeskCardSnapshot? cards;
   final Duration cardRevealAfter;
+
+  /// Cross-desk result line drawn across the top of the blue board.
+  final Widget? boardBanner;
 
   @override
   Widget build(BuildContext context) {
@@ -331,6 +335,13 @@ class BaccaratBettingPanel extends StatelessWidget {
                     longhu: longhu,
                     revealAfter: cardRevealAfter,
                   ),
+                  if (boardBanner != null)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: boardBanner!,
+                    ),
                 ],
               ),
             ),
